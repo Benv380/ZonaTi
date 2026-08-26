@@ -1,0 +1,20 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: gateway-service
+
+# URLs base de cada microservicio downstream. Se leen desde
+# GatewayRoutesConfig en vez de hardcodear host:puerto en el codigo Java, asi
+# alcanza con cambiar esto (o pisarlo con una variable de entorno,
+# SERVICES_COMPRA_AGIL_URL / SERVICES_LICITACION_URL) para apuntar a otro
+# lado sin recompilar -- por ejemplo, en docker-compose.yml cada nombre de
+# servicio se resuelve solo por DNS interno de Docker.
+services:
+  compra-agil:
+    url: http://localhost:8082
+  licitacion:
+    url: http://localhost:8083
+  auth:
+    url: http://localhost:8081

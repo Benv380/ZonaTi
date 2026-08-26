@@ -1,0 +1,10 @@
+# Instalar con:
+#   pip install -r requirements.txt
+#   playwright install chromium
+#
+# (el Dockerfile de este servicio ya hace los dos pasos solo, esto es para
+# correrlo suelto en desarrollo).
+
+playwright
+fastapi
+uvicorn[standard]

@@ -1,0 +1,53 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: compra-service
+  datasource:
+    # Base de datos propia de este servicio -- no comparte tablas con
+    # licitacion-service (cada microservicio es dueño de sus propios datos).
+    # Para hablarle a la base de la VM de Azure, levanta el tunel SSH (ver
+    # notas del proyecto) y corre la app con:
+    #   $env:DB_URL="jdbc:postgresql://localhost:15432/compra_service_db"
+    #   $env:DB_USERNAME="<usuario_pg_vm>"
+    #   $env:DB_PASSWORD="<password_pg_vm>"
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/compra_service_db}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      initialization-fail-timeout: -1
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: none
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+  sql:
+    init:
+      # El esquema se controla a mano en schema.sql (ver ese archivo), no
+      # con ddl-auto.
+      mode: always
+      continue-on-error: false
+
+compra-service:
+  cache:
+    # Minutos que se considera "fresca" una fila cacheada (compras agiles,
+    # adjuntos) antes de volver a pedirla a Mercado Publico.
+    ttl-minutos: 10
+  sync:
+    # Cada cuanto corre CompraAgilSyncScheduler.
+    fixed-delay: PT10M
+
+mercado-publico:
+  compra-agil:
+    url: https://api2.mercadopublico.cl
+    ticket: A84949FD-A50D-40C4-A3D2-83791DFA28A3
+  adjuntos:
+    url: https://adjunto.mercadopublico.cl/adjunto-compra-agil
+    user-key: 41186b85826e80d1a0d445a6ce67d1a3
+  auth:
+    url: https://servicios-prd.mercadopublico.cl

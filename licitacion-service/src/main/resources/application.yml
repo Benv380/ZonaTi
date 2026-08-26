@@ -1,0 +1,59 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: licitacion-service
+  datasource:
+    # Base de datos propia de este servicio -- no comparte tablas con
+    # compra-service (cada microservicio es dueño de sus propios datos).
+    # Para hablarle a la base de la VM de Azure, levanta el tunel SSH (ver
+    # notas del proyecto) y corre la app con:
+    #   $env:DB_URL="jdbc:postgresql://localhost:15432/licitacion_service_db"
+    #   $env:DB_USERNAME="<usuario_pg_vm>"
+    #   $env:DB_PASSWORD="<password_pg_vm>"
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/licitacion_service_db}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      initialization-fail-timeout: -1
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: none
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+  sql:
+    init:
+      mode: always
+      continue-on-error: false
+
+compra-service:
+  cache:
+    # TTL propio para licitaciones, mayor al intervalo del scheduler
+    # (compra-service.sync.fixed-delay) a proposito: si fueran iguales, el
+    # cache nunca sirve de nada (ver comentario en LicitacionService).
+    ttl-minutos-licitaciones: 60
+  licitaciones:
+    # Cuantos dias hacia atras trae GET /compra/licitacion/listar (y lo que
+    # usa el scheduler para descubrir candidatas), se hayan cerrado ya o no.
+    dias-listado: 15
+  sync:
+    # Cada cuanto corre LicitacionSyncScheduler.
+    fixed-delay: PT10M
+
+# scraper-service: servicio Python aparte (Playwright) que hace el scraping
+# real -- ver LicitacionAttachmentScraperClient. Es el unico servicio que
+# sale por el proxy residencial (Tailscale), este servicio (Java) no
+# necesita Chromium instalado.
+scraper-service:
+  url: ${SCRAPER_SERVICE_URL:http://localhost:8090}
+  timeout-seconds: 120
+
+mercado-publico:
+  licitacion:
+    url: https://api.mercadopublico.cl/servicios/v1/publico
+    ticket: A84949FD-A50D-40C4-A3D2-83791DFA28A3

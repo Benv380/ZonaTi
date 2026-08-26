@@ -1,0 +1,21 @@
+# Build output (Maven) -- se regenera solo, nunca se versiona.
+target/
+
+# Estado local de Claude Code (permisos acumulados de sesiones, no es
+# configuracion del proyecto).
+.claude/
+
+# IDE / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.iml
+.DS_Store
+Thumbs.db
+
+# Logs y temporales locales
+*.log
+
+# Secretos locales por entorno (auth keys, etc.) -- nunca se commitean.
+.env
+.env.*

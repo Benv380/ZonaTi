@@ -1,0 +1,47 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: auth-service
+  datasource:
+    # TEMPORAL: comparte la base de licitacion-service en vez de tener una
+    # propia (auth_service_db), para no provisionar una tercera base ahora.
+    # Cuando se migre a database-per-service, auth-service pasa a
+    # auth_service_db y este comentario se borra.
+    # Para produccion/staging, sobreescribe con variables de entorno reales
+    # (ver .env, que esta gitignoreado). Los defaults de abajo son solo para
+    # levantar el servicio en local.
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/licitacion_service_db}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      initialization-fail-timeout: -1
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      # none, no update: el esquema de esta base ya no es dueño exclusivo de
+      # auth-service (la comparte con licitacion-service), asi que Hibernate
+      # no debe tocarlo solo. El schema.sql de abajo crea unicamente su
+      # propia tabla (users), igual que hacen compra-service/licitacion-service.
+      ddl-auto: none
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+  sql:
+    init:
+      mode: always
+      continue-on-error: false
+
+jwt:
+  # SIEMPRE define JWT_SECRET en produccion (no uses el default). Generalo con:
+  #   openssl rand -base64 64
+  # Minimo 32 bytes (256 bits) una vez decodificado -- JwtUtil falla al
+  # arrancar si es mas corto o si falta. El valor de abajo es un secreto de
+  # 512 bits generado al azar SOLO para desarrollo local; al estar en el
+  # repo, no debe usarse en ningun ambiente real.
+  secret: ${JWT_SECRET:HItWQEJMcp3PQhBbAL+HRyl4XZkhtzLOU/anaFiq1PKWwHpCmkoUcQcBXBpoKNqzpylGBePk+AbYODreqOelzg==}
+  # 1 hora, en milisegundos.
+  expiration-ms: ${JWT_EXPIRATION_MS:3600000}

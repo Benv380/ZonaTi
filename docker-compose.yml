@@ -1,0 +1,100 @@
+services:
+  # Sidecar de Tailscale: SOLO scraper-service sale por acá (IP residencial
+  # como exit node, para esquivar el bloqueo por IP de datacenter que tiene
+  # mercadopublico.cl en el flujo de adjuntos). Expone un proxy SOCKS5 en la
+  # red normal de Docker Compose -- ningun otro servicio pasa por acá salvo
+  # que apunte explícitamente su SCRAPER_PROXY a este.
+  ts-scraper-proxy:
+    image: tailscale/tailscale:latest
+    hostname: ts-scraper-proxy
+    environment:
+      # TS_AUTHKEY y TS_EXIT_NODE_IP salen de un .env local (no se
+      # commitea, ver .gitignore) -- el auth key es un secreto.
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_EXTRA_ARGS=--exit-node=${TS_EXIT_NODE_IP} --exit-node-allow-lan-access=false
+      - TS_SOCKS5_SERVER=:1080
+      - TS_STATE_DIR=/var/lib/tailscale
+    volumes:
+      - ts-scraper-state:/var/lib/tailscale
+    cap_add:
+      - NET_ADMIN
+    restart: unless-stopped
+
+  # Unico servicio con Chromium/Playwright instalado, y el unico que sale
+  # por ts-scraper-proxy. Sin "ports": no hace falta exponerlo fuera de la
+  # red de Docker Compose, solo licitacion-service le habla, por nombre.
+  scraper-service:
+    build: ./scraper-service
+    environment:
+      - SCRAPER_PROXY=socks5://ts-scraper-proxy:1080
+    depends_on:
+      - ts-scraper-proxy
+    restart: unless-stopped
+
+  auth-service:
+    build: ./auth-service
+    # Sin "ports": no debe quedar expuesto fuera de la red de Docker Compose.
+    # El unico camino de entrada es gateway-service (unico servicio con TLS
+    # el dia que se defina el dominio/certificado de produccion).
+    environment:
+      # TEMPORAL: comparte la base de licitacion-service (misma DB, tabla
+      # "users" propia, sin FKs cruzadas) en vez de tener auth_service_db
+      # propia -- ver comentario en auth-service/application.yml.
+      - DB_URL=jdbc:postgresql://172.17.0.1:5432/licitacion_service_db
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=postgres
+      # Secreto real de JWT: nunca el default de application.yml (ese es
+      # solo para levantar el servicio suelto en un dev local). Sale de un
+      # .env que no se commitea -- ver .gitignore.
+      - JWT_SECRET=${AUTH_JWT_SECRET}
+    restart: unless-stopped
+
+  compra-service:
+    build: ./compra-service
+    ports:
+      - "8082:8082"
+    environment:
+      - DB_URL=jdbc:postgresql://172.17.0.1:5432/compra_service_db
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=postgres
+    restart: unless-stopped
+
+  licitacion-service:
+    build: ./licitacion-service
+    ports:
+      - "8083:8083"
+    environment:
+      - DB_URL=jdbc:postgresql://172.17.0.1:5432/licitacion_service_db
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=postgres
+      # "scraper-service" se resuelve solo por DNS interno de Docker
+      # Compose, sin IP hardcodeada. Este servicio (Java) no necesita saber
+      # nada de Tailscale/Chromium -- eso es asunto de scraper-service.
+      - SCRAPER_SERVICE_URL=http://scraper-service:8090
+    depends_on:
+      - scraper-service
+    restart: unless-stopped
+
+  gateway-service:
+    build: ./gateway-service
+    ports:
+      # Unico puerto que deberia quedar expuesto hacia afuera una vez que
+      # el front hable solo con el gateway -- compra-service/licitacion-service
+      # siguen publicando sus puertos por ahora para poder probarlos sueltos
+      # durante la migracion.
+      - "8080:8080"
+    environment:
+      # Spring traduce "services.compra-agil.url" a esta forma (puntos y
+      # guiones -> "_", todo mayuscula) via su binding relajado de
+      # variables de entorno.
+      - SERVICES_COMPRA_AGIL_URL=http://compra-service:8082
+      - SERVICES_LICITACION_URL=http://licitacion-service:8083
+      - SERVICES_AUTH_URL=http://auth-service:8081
+    depends_on:
+      - compra-service
+      - licitacion-service
+      - auth-service
+    restart: unless-stopped
+
+volumes:
+  ts-scraper-state:
