@@ -40,7 +40,7 @@ services:
       # TEMPORAL: comparte la base de licitacion-service (misma DB, tabla
       # "users" propia, sin FKs cruzadas) en vez de tener auth_service_db
       # propia -- ver comentario en auth-service/application.yml.
-      - DB_URL=jdbc:postgresql://172.17.0.1:5432/licitacion_service_db
+      - DB_URL=jdbc:postgresql://172.17.0.1:5432/zonati_licitacion_service_db
       - DB_USERNAME=postgres
       - DB_PASSWORD=postgres
       # Secreto real de JWT: nunca el default de application.yml (ese es
@@ -54,7 +54,7 @@ services:
     ports:
       - "8082:8082"
     environment:
-      - DB_URL=jdbc:postgresql://172.17.0.1:5432/compra_service_db
+      - DB_URL=jdbc:postgresql://172.17.0.1:5432/zonati_compra_service_db
       - DB_USERNAME=postgres
       - DB_PASSWORD=postgres
     restart: unless-stopped
@@ -64,7 +64,7 @@ services:
     ports:
       - "8083:8083"
     environment:
-      - DB_URL=jdbc:postgresql://172.17.0.1:5432/licitacion_service_db
+      - DB_URL=jdbc:postgresql://172.17.0.1:5432/zonati_licitacion_service_db
       - DB_USERNAME=postgres
       - DB_PASSWORD=postgres
       # "scraper-service" se resuelve solo por DNS interno de Docker

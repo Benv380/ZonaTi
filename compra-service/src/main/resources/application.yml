@@ -9,10 +9,10 @@ spring:
     # licitacion-service (cada microservicio es dueño de sus propios datos).
     # Para hablarle a la base de la VM de Azure, levanta el tunel SSH (ver
     # notas del proyecto) y corre la app con:
-    #   $env:DB_URL="jdbc:postgresql://localhost:15432/compra_service_db"
+    #   $env:DB_URL="jdbc:postgresql://localhost:15432/zonati_compra_service_db"
     #   $env:DB_USERNAME="<usuario_pg_vm>"
     #   $env:DB_PASSWORD="<password_pg_vm>"
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/compra_service_db}
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/zonati_compra_service_db}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver

@@ -12,7 +12,7 @@ spring:
     # Para produccion/staging, sobreescribe con variables de entorno reales
     # (ver .env, que esta gitignoreado). Los defaults de abajo son solo para
     # levantar el servicio en local.
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/licitacion_service_db}
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/zonati_licitacion_service_db}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
