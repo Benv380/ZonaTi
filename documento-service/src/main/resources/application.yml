@@ -1,19 +1,27 @@
 server:
-  port: 8083
+  port: 8084
 
 spring:
   application:
     name: documento-service
   datasource:
-    url: jdbc:postgresql://localhost:5432/documento_service_db
-    username: postgres
-    password: postgres
+    # Mismo patron que auth/compra/licitacion-service: nunca credenciales
+    # en texto plano, siempre via variable de entorno (con default solo
+    # para levantar suelto en un dev local).
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/documento_service_db}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
     hikari:
       initialization-fail-timeout: -1
   jpa:
     hibernate:
-      ddl-auto: update
+      # ddl-auto en "none": este servicio todavia no tiene schema.sql
+      # propio (queda fuera de la Fase 1, ver plan de despliegue) -- se
+      # deja "none" en vez de "update" para no arrancar aplicando el
+      # patron viejo (auto-DDL) el dia que se retome, y arrastrar el
+      # problema a produccion.
+      ddl-auto: none
     show-sql: true
     properties:
       hibernate:

@@ -69,10 +69,31 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- Para RestClient (LicitacionClient, la API publica de Mercado Publico) -->
+        <!-- Para RestClient (LicitacionClient, la API publica de Mercado Publico,
+             y LicitacionAttachmentScraperClient, hacia scraper-service) -->
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-web</artifactId>
+        </dependency>
+
+        <!-- Validacion (JWT emitido por auth-service, ver JwtUtil), mismas
+             versiones que auth-service/compra-service. -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>0.12.6</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>0.12.6</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>0.12.6</version>
+            <scope>runtime</scope>
         </dependency>
     </dependencies>
 

@@ -5,14 +5,13 @@ spring:
   application:
     name: auth-service
   datasource:
-    # TEMPORAL: comparte la base de licitacion-service en vez de tener una
-    # propia (auth_service_db), para no provisionar una tercera base ahora.
-    # Cuando se migre a database-per-service, auth-service pasa a
-    # auth_service_db y este comentario se borra.
-    # Para produccion/staging, sobreescribe con variables de entorno reales
-    # (ver .env, que esta gitignoreado). Los defaults de abajo son solo para
-    # levantar el servicio en local.
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/zonati_licitacion_service_db}
+    # Base de datos propia de este servicio -- no comparte tablas con
+    # compra-service. Para hablarle a la base de la VM de Azure, levanta el
+    # tunel SSH (ver notas del proyecto) y corre la app con:
+    #   $env:DB_URL="jdbc:postgresql://localhost:15432/auth_service_db"
+    #   $env:DB_USERNAME="<usuario_pg_vm>"
+    #   $env:DB_PASSWORD="<password_pg_vm>"
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/auth_service_db}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
@@ -21,10 +20,8 @@ spring:
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
-      # none, no update: el esquema de esta base ya no es dueño exclusivo de
-      # auth-service (la comparte con licitacion-service), asi que Hibernate
-      # no debe tocarlo solo. El schema.sql de abajo crea unicamente su
-      # propia tabla (users), igual que hacen compra-service/licitacion-service.
+      # El esquema se controla a mano en schema.sql (ver ese archivo), no
+      # con ddl-auto -- mismo patron que compra-service.
       ddl-auto: none
     show-sql: true
     properties:
@@ -36,12 +33,25 @@ spring:
       continue-on-error: false
 
 jwt:
-  # SIEMPRE define JWT_SECRET en produccion (no uses el default). Generalo con:
-  #   openssl rand -base64 64
-  # Minimo 32 bytes (256 bits) una vez decodificado -- JwtUtil falla al
-  # arrancar si es mas corto o si falta. El valor de abajo es un secreto de
-  # 512 bits generado al azar SOLO para desarrollo local; al estar en el
-  # repo, no debe usarse en ningun ambiente real.
-  secret: ${JWT_SECRET:HItWQEJMcp3PQhBbAL+HRyl4XZkhtzLOU/anaFiq1PKWwHpCmkoUcQcBXBpoKNqzpylGBePk+AbYODreqOelzg==}
+  # Sin default a proposito -- un secreto "solo para dev" en el repo es un
+  # secreto conocido por cualquiera que lea el codigo en GitHub, en dev o
+  # en produccion da lo mismo. Sin JWT_SECRET seteado, JwtUtil tira un
+  # error claro al arrancar (no arranca en silencio con algo inseguro).
+  # Generalo con: openssl rand -base64 64 (minimo 32 bytes/256 bits
+  # decodificado). Para dev local sin Docker: exportalo en la terminal
+  # antes de levantar (compra-service necesita EXACTAMENTE el mismo
+  # valor, ver su application.yml). En Docker Compose ya viaja solo por
+  # JWT_SECRET/AUTH_JWT_SECRET (.env, no se commitea).
+  secret: ${JWT_SECRET}
   # 1 hora, en milisegundos.
   expiration-ms: ${JWT_EXPIRATION_MS:3600000}
+
+chilecompra:
+  # Clave AES-256 (32 bytes en base64) para cifrar/descifrar
+  # Empresa.chileCompraPasswordCifrada (ver CifradoAesService) -- sin
+  # default a proposito, mismo criterio que JWT_SECRET. Generarla con:
+  #   openssl rand -base64 32
+  # OJO: si esta clave se pierde o cambia, las credenciales ya guardadas
+  # quedan indescifrables para siempre -- no hay forma de recuperarlas,
+  # cada empresa tendria que volver a cargarlas.
+  encryption-key: ${CHILECOMPRA_ENCRYPTION_KEY}

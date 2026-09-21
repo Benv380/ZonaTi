@@ -4,10 +4,10 @@ COPY pom.xml .
 COPY src ./src
 RUN mvn clean package -DskipTests
 
-# Compra Agil no necesita Chromium/Playwright (su unica descarga de
-# binarios es via AdjuntoClient, HTTP directo con headers de navegador --
-# ver comentario en AdjuntoClient) -- alcanza con un JRE simple, mas liviano
-# que la imagen de licitacion-service.
+# Solo Compra Agil (proxy sobre la API de Mercado Publico) -- sin Python/
+# Chromium/Xvfb, ese scraping vive aparte en scraper-service desde el split
+# de compra-service en 2 servicios (Compra Agil / Licitacion). Alpine
+# alcanza porque acá no hay ninguna dependencia que necesite glibc.
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 

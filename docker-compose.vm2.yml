@@ -1,0 +1,103 @@
+# docker-compose para VM2 (backend + base de datos: auth/compra/
+# licitacion/scraper + Postgres) -- privada, sin IP publica. Se corre
+# desde acá con:
+#   docker compose -f docker-compose.vm2.yml up -d --build
+#
+# Despliegue de 2 VMs (revertido desde 3): Postgres ya no vive en una VM
+# aparte (VM3, ver docker-compose.vm3.yml -- queda sin usar, no se borró
+# por si se reconsidera), corre en este mismo host Docker. Los 3
+# servicios Java le hablan por el nombre de servicio de Compose
+# ("postgres"), resuelto por DNS interno -- no por IP.
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      # Publicado en la VM por si hace falta conectarse desde afuera
+      # (pgAdmin, o el gateway de datos on-premises de Power Automate mas
+      # adelante) -- el Network Security Group de Azure decide quien
+      # puede llegar de verdad, restringir a las IPs puntuales que lo
+      # necesiten (nunca abierto a Any).
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${DB_USERNAME}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      # Base "puente" que exige la imagen para arrancar -- las 3 bases
+      # reales las crea init-databases.sql aparte.
+      - POSTGRES_DB=postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+    restart: unless-stopped
+
+  ts-scraper-proxy:
+    image: tailscale/tailscale:latest
+    hostname: ts-scraper-proxy
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_EXTRA_ARGS=--exit-node=${TS_EXIT_NODE_IP} --exit-node-allow-lan-access=false
+      - TS_SOCKS5_SERVER=:1080
+      - TS_STATE_DIR=/var/lib/tailscale
+    volumes:
+      - ts-scraper-state:/var/lib/tailscale
+    cap_add:
+      - NET_ADMIN
+    restart: unless-stopped
+
+  scraper-service:
+    build: ./scraper-service
+    environment:
+      - SCRAPER_PROXY=socks5://ts-scraper-proxy:1080
+    depends_on:
+      - ts-scraper-proxy
+    restart: unless-stopped
+
+  auth-service:
+    build: ./auth-service
+    ports:
+      # Publicado en la VM, pero el Network Security Group de Azure solo
+      # deja pasar trafico desde la IP privada de VM1 (y la del admin para
+      # SSH) -- no queda abierto a internet aunque el puerto este mapeado.
+      - "8081:8081"
+    environment:
+      - DB_URL=jdbc:postgresql://postgres:5432/auth_service_db
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - JWT_SECRET=${AUTH_JWT_SECRET}
+      - CHILECOMPRA_ENCRYPTION_KEY=${CHILECOMPRA_ENCRYPTION_KEY}
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  compra-service:
+    build: ./compra-service
+    ports:
+      - "8082:8082"
+    environment:
+      - DB_URL=jdbc:postgresql://postgres:5432/compra_service_db
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - JWT_SECRET=${AUTH_JWT_SECRET}
+      - AUTH_SERVICE_URL=http://auth-service:8081
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  licitacion-service:
+    build: ./licitacion-service
+    ports:
+      - "8083:8083"
+    environment:
+      - DB_URL=jdbc:postgresql://postgres:5432/licitacion_service_db
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - JWT_SECRET=${AUTH_JWT_SECRET}
+      - AUTH_SERVICE_URL=http://auth-service:8081
+      - SCRAPER_SERVICE_URL=http://scraper-service:8090
+    depends_on:
+      - scraper-service
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  ts-scraper-state:
+  pgdata:

@@ -37,10 +37,11 @@ services:
     # El unico camino de entrada es gateway-service (unico servicio con TLS
     # el dia que se defina el dominio/certificado de produccion).
     environment:
-      # TEMPORAL: comparte la base de licitacion-service (misma DB, tabla
-      # "users" propia, sin FKs cruzadas) en vez de tener auth_service_db
-      # propia -- ver comentario en auth-service/application.yml.
-      - DB_URL=jdbc:postgresql://172.17.0.1:5432/zonati_licitacion_service_db
+      # Base propia (no compartida con licitacion-service) -- auth-service
+      # ya trae roles/empresas/asignaciones/marca-cotizacion/documentos,
+      # bastante mas que la tabla "users" suelta que justificaba el
+      # compartido temporal original.
+      - DB_URL=jdbc:postgresql://172.17.0.1:5432/auth_service_db
       - DB_USERNAME=postgres
       - DB_PASSWORD=postgres
       # Secreto real de JWT: nunca el default de application.yml (ese es
@@ -54,9 +55,11 @@ services:
     ports:
       - "8082:8082"
     environment:
-      - DB_URL=jdbc:postgresql://172.17.0.1:5432/zonati_compra_service_db
+      - DB_URL=jdbc:postgresql://172.17.0.1:5432/compra_service_db
       - DB_USERNAME=postgres
       - DB_PASSWORD=postgres
+      - JWT_SECRET=${AUTH_JWT_SECRET}
+      - AUTH_SERVICE_URL=http://auth-service:8081
     restart: unless-stopped
 
   licitacion-service:
@@ -64,9 +67,11 @@ services:
     ports:
       - "8083:8083"
     environment:
-      - DB_URL=jdbc:postgresql://172.17.0.1:5432/zonati_licitacion_service_db
+      - DB_URL=jdbc:postgresql://172.17.0.1:5432/licitacion_service_db
       - DB_USERNAME=postgres
       - DB_PASSWORD=postgres
+      - JWT_SECRET=${AUTH_JWT_SECRET}
+      - AUTH_SERVICE_URL=http://auth-service:8081
       # "scraper-service" se resuelve solo por DNS interno de Docker
       # Compose, sin IP hardcodeada. Este servicio (Java) no necesita saber
       # nada de Tailscale/Chromium -- eso es asunto de scraper-service.
@@ -94,6 +99,14 @@ services:
       - compra-service
       - licitacion-service
       - auth-service
+    restart: unless-stopped
+
+  frontend:
+    build: ./Front/front-Api
+    ports:
+      - "3000:80"
+    depends_on:
+      - gateway-service
     restart: unless-stopped
 
 volumes:

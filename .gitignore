@@ -19,3 +19,9 @@ Thumbs.db
 # Secretos locales por entorno (auth keys, etc.) -- nunca se commitean.
 .env
 .env.*
+
+# El front vive en su propio repositorio aparte (Zona-Ti-Front-Pruebas) --
+# este repo (ZonaTi) es solo backend/microservicios. Se mantiene la
+# carpeta localmente (comparten la misma maquina de trabajo) pero nunca
+# se trackea desde aca.
+Front/

@@ -21,7 +21,7 @@ import cl.zona_ti.licitacion_service.Service.LicitacionService;
 import jakarta.annotation.PreDestroy;
 
 /**
- * Cada X minutos (compra-service.sync.fixed-delay):
+ * Cada X minutos (licitacion-service.sync.fixed-delay):
  *  1) Pide a LicitacionService las licitaciones recientes -- mismo método
  *     que ya usa el frontend (GET /compra/licitacion/listar), que a su vez
  *     consulta la API pública de Mercado Público y guarda cada licitación
@@ -31,13 +31,14 @@ import jakarta.annotation.PreDestroy;
  *     adjunto_licitacion. Los documentos de una licitación no cambian una
  *     vez publicados, así que "ya existe" es suficiente -- no hay TTL acá.
  *  3) Las licitaciones sin adjuntos se encolan en un pool fijo de 2
- *     pedidos a scraper-service en paralelo -- así nunca se abren más
- *     de 2 ventanas de Chromium al mismo tiempo (allá, no acá), sin
- *     importar cuántas licitaciones nuevas aparezcan en un ciclo.
+ *     pedidos a scraper-service en paralelo -- así nunca hay más de 2
+ *     descargas (cada una con su propia ventana de Chromium del lado de
+ *     scraper-service) corriendo al mismo tiempo, sin importar cuántas
+ *     licitaciones nuevas aparezcan en un ciclo.
  *
- * Si no hay nada pendiente, el ciclo no le pide nada a scraper-service --
- * el costo caro (levantar Chromium) solo se paga cuando realmente hace
- * falta.
+ * Si no hay nada pendiente, el ciclo no le pega a scraper-service para
+ * nada -- el costo caro (levantar Chromium) solo se paga cuando realmente
+ * hace falta.
  */
 @Component
 public class LicitacionSyncScheduler {
@@ -59,7 +60,7 @@ public class LicitacionSyncScheduler {
         this.licitacionService = licitacionService;
     }
 
-    @Scheduled(fixedDelayString = "${compra-service.sync.fixed-delay:PT10M}")
+    @Scheduled(fixedDelayString = "${licitacion-service.sync.fixed-delay:PT10M}")
     public void sincronizarAdjuntos() {
         List<String> codigosDelPeriodo = obtenerCodigosLicitacionesRecientes();
         if (codigosDelPeriodo.isEmpty()) {

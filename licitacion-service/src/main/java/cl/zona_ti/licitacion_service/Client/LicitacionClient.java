@@ -1,6 +1,9 @@
 package cl.zona_ti.licitacion_service.Client;
 
+import java.time.Duration;
+
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -16,8 +19,16 @@ public class LicitacionClient {
             @Value("${mercado-publico.licitacion.url}") String baseUrl,
             @Value("${mercado-publico.licitacion.ticket}") String ticket) {
         this.ticket = ticket;
+        // Mismo motivo que CompraAgilClient: sin request factory propia,
+        // esto no tiene timeout por defecto y puede colgarse para siempre
+        // si Mercado Publico no responde.
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(Duration.ofSeconds(5));
+        requestFactory.setReadTimeout(Duration.ofSeconds(20));
+
         this.restClient = RestClient.builder()
                 .baseUrl(baseUrl)
+                .requestFactory(requestFactory)
                 .build();
     }
 

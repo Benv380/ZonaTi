@@ -5,14 +5,13 @@ spring:
   application:
     name: licitacion-service
   datasource:
-    # Base de datos propia de este servicio -- no comparte tablas con
-    # compra-service (cada microservicio es dueño de sus propios datos).
-    # Para hablarle a la base de la VM de Azure, levanta el tunel SSH (ver
-    # notas del proyecto) y corre la app con:
-    #   $env:DB_URL="jdbc:postgresql://localhost:15432/zonati_licitacion_service_db"
+    # Por defecto apunta al Postgres local (puerto 5432). Para hablarle a la
+    # base de la VM de Azure, levanta el tunel SSH (ver notas del proyecto)
+    # y corre la app con:
+    #   $env:DB_URL="jdbc:postgresql://localhost:15432/licitacion_service_db"
     #   $env:DB_USERNAME="<usuario_pg_vm>"
     #   $env:DB_PASSWORD="<password_pg_vm>"
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/zonati_licitacion_service_db}
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/licitacion_service_db}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
@@ -31,25 +30,52 @@ spring:
       mode: always
       continue-on-error: false
 
-compra-service:
+licitacion-service:
   cache:
-    # TTL propio para licitaciones, mayor al intervalo del scheduler
-    # (compra-service.sync.fixed-delay) a proposito: si fueran iguales, el
-    # cache nunca sirve de nada (ver comentario en LicitacionService).
-    ttl-minutos-licitaciones: 60
-  licitaciones:
-    # Cuantos dias hacia atras trae GET /compra/licitacion/listar (y lo que
-    # usa el scheduler para descubrir candidatas), se hayan cerrado ya o no.
-    dias-listado: 15
+    # Minutos que se considera "fresca" una licitacion cacheada antes de
+    # volver a pedir su detalle a Mercado Publico. Tiene que ser MAYOR al
+    # intervalo de LicitacionSyncScheduler (licitacion-service.sync.fixed-
+    # delay, 10 min por defecto) para que el scheduler no vuelva a pedir el
+    # detalle completo de todas las candidatas del dia en cada ciclo (eso
+    # generaba picos de CPU y presion sobre la API externa).
+    ttl-minutos: 60
+  # Cuantos dias hacia atras se trae en GET /compra/licitacion/listar (y lo
+  # que usa LicitacionSyncScheduler para descubrir candidatas): todo lo
+  # publicado en esta ventana, se haya cerrado ya o no. Ojo con subirlo
+  # mucho: el primer ciclo pide 1 llamada por dia a la API externa, y
+  # despues el detalle de cada candidata nueva (se cachea con
+  # cache.ttl-minutos, asi que los ciclos siguientes son livianos).
+  dias-listado: 15
   sync:
-    # Cada cuanto corre LicitacionSyncScheduler.
+    # Cada cuanto corre LicitacionSyncScheduler (formato ISO-8601 Duration).
     fixed-delay: PT10M
 
-# scraper-service: servicio Python aparte (Playwright) que hace el scraping
-# real -- ver LicitacionAttachmentScraperClient. Es el unico servicio que
-# sale por el proxy residencial (Tailscale), este servicio (Java) no
-# necesita Chromium instalado.
+jwt:
+  # TIENE que ser exactamente el mismo secreto que usa auth-service (ver su
+  # application.yml/JWT_SECRET) -- si no coinciden, ningun token valida y
+  # todo el servicio queda inaccesible (SecurityConfig exige "authenticated()"
+  # en cualquier endpoint). Sin default en el codigo a proposito -- un
+  # secreto "solo para dev" commiteado en GitHub es un secreto conocido
+  # por cualquiera, no protege nada. Sin JWT_SECRET seteado, JwtUtil tira
+  # un error claro al arrancar en vez de fallar silencioso con firmas que
+  # nunca calzan.
+  secret: ${JWT_SECRET}
+
+auth-service:
+  # Donde vive auth-service -- lo usa PerfilClient para pedir el perfil de
+  # busqueda de la empresa (rubro/palabras clave/region, ver
+  # LicitacionService.buscarConFiltroEmpresa). En Docker Compose se
+  # resuelve solo por DNS interno ("auth-service", nombre del servicio);
+  # este default es para levantar licitacion-service suelto en dev local.
+  url: ${AUTH_SERVICE_URL:http://localhost:8081}
+
 scraper-service:
+  # Donde vive scraper-service (Python + Playwright) -- lo usa
+  # LicitacionAttachmentScraperClient para pedir los adjuntos de una
+  # licitacion por HTTP en vez de correr el scraping en este proceso. En
+  # Docker Compose se resuelve por DNS interno; este default es para
+  # levantar licitacion-service suelto en dev local (con scraper-service
+  # corriendo aparte, ver scraper-service/app.py).
   url: ${SCRAPER_SERVICE_URL:http://localhost:8090}
   timeout-seconds: 120
 
@@ -57,3 +83,7 @@ mercado-publico:
   licitacion:
     url: https://api.mercadopublico.cl/servicios/v1/publico
     ticket: A84949FD-A50D-40C4-A3D2-83791DFA28A3
+
+logging:
+  level:
+    cl.zona_ti.licitacion_service.Scheduler: DEBUG

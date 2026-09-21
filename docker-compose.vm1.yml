@@ -1,0 +1,31 @@
+# docker-compose para VM1 (front + gateway) -- la unica maquina con IP
+# publica. Se corre desde acá con: docker compose -f docker-compose.vm1.yml up -d --build
+#
+# A diferencia del docker-compose.yml de un solo host (para probar todo
+# junto en esta máquina), acá gateway-service ya NO le habla a
+# compra-service/licitacion-service/auth-service por nombre de servicio
+# de Docker (viven en OTRA máquina, VM2, fuera de esta red de Compose) --
+# les habla por la IP PRIVADA de VM2 dentro de la VNet de Azure (ver
+# VM2_PRIVATE_IP en el .env de esta VM).
+services:
+  gateway-service:
+    build: ./gateway-service
+    # Sin "ports" hacia el host: nginx (mismo docker-compose, misma red)
+    # le habla por nombre de servicio ("gateway-service:8080"), nadie de
+    # afuera necesita pegarle directo a este puerto.
+    environment:
+      - SERVICES_COMPRA_AGIL_URL=http://${VM2_PRIVATE_IP}:8082
+      - SERVICES_LICITACION_URL=http://${VM2_PRIVATE_IP}:8083
+      - SERVICES_AUTH_URL=http://${VM2_PRIVATE_IP}:8081
+    restart: unless-stopped
+
+  frontend:
+    build: ./Front/front-Api
+    ports:
+      # 80 mientras no haya Cloudflare/certificado -- una vez armado eso
+      # (ver [[pendiente-tls-https]]), se agrega el 443 con el Origin
+      # Certificate de Cloudflare instalado en nginx.conf.
+      - "80:80"
+    depends_on:
+      - gateway-service
+    restart: unless-stopped

@@ -5,14 +5,13 @@ spring:
   application:
     name: compra-service
   datasource:
-    # Base de datos propia de este servicio -- no comparte tablas con
-    # licitacion-service (cada microservicio es dueño de sus propios datos).
-    # Para hablarle a la base de la VM de Azure, levanta el tunel SSH (ver
-    # notas del proyecto) y corre la app con:
-    #   $env:DB_URL="jdbc:postgresql://localhost:15432/zonati_compra_service_db"
+    # Por defecto apunta al Postgres local (puerto 5432). Para hablarle a la
+    # base de la VM de Azure, levanta el tunel SSH en el puerto 15432 (ver
+    # notas en el proyecto) y corre la app con:
+    #   $env:DB_URL="jdbc:postgresql://localhost:15432/compra_service_db"
     #   $env:DB_USERNAME="<usuario_pg_vm>"
     #   $env:DB_PASSWORD="<password_pg_vm>"
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/zonati_compra_service_db}
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/compra_service_db}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
@@ -28,19 +27,43 @@ spring:
         format_sql: true
   sql:
     init:
-      # El esquema se controla a mano en schema.sql (ver ese archivo), no
-      # con ddl-auto.
       mode: always
       continue-on-error: false
 
 compra-service:
   cache:
     # Minutos que se considera "fresca" una fila cacheada (compras agiles,
-    # adjuntos) antes de volver a pedirla a Mercado Publico.
-    ttl-minutos: 10
+    # adjuntos de compra agil) antes de volver a pedirla a Mercado Publico.
+    # Tiene que ser MAYOR al intervalo de CompraAgilSyncScheduler
+    # (compra-service.sync.fixed-delay, 10 min por defecto) -- con 10
+    # (igual al intervalo) el detalle quedaba "vencido" justo antes de
+    # cada ciclo, asi que abrir el detalle desde "Mostrar todo" terminaba
+    # pegandole en vivo a Mercado Publico (hasta 20s de espera) en vez de
+    # servir el cache que todavia era valido.
+    ttl-minutos: 20
   sync:
-    # Cada cuanto corre CompraAgilSyncScheduler.
+    # Cada cuanto corre CompraAgilSyncScheduler (formato ISO-8601 Duration).
     fixed-delay: PT10M
+
+jwt:
+  # TIENE que ser exactamente el mismo secreto que usa auth-service (ver su
+  # application.yml/JWT_SECRET) -- si no coinciden, ningun token valida y
+  # todo el servicio queda inaccesible (SecurityConfig exige "authenticated()"
+  # en cualquier endpoint). Sin default en el codigo a proposito -- un
+  # secreto "solo para dev" commiteado en GitHub es un secreto conocido
+  # por cualquiera, no protege nada. Sin JWT_SECRET seteado, JwtUtil tira
+  # un error claro al arrancar en vez de fallar silencioso con firmas que
+  # nunca calzan.
+  secret: ${JWT_SECRET}
+
+auth-service:
+  # Donde vive auth-service -- lo usa PerfilClient para pedir el perfil de
+  # busqueda de la empresa (rubro/palabras clave/region, ver
+  # LicitacionService.buscarConFiltroEmpresa/CompraAgilService.buscar). En
+  # Docker Compose se resuelve solo por DNS interno ("auth-service",
+  # nombre del servicio); este default es para levantar compra-service
+  # suelto en dev local.
+  url: ${AUTH_SERVICE_URL:http://localhost:8081}
 
 mercado-publico:
   compra-agil:
@@ -51,3 +74,6 @@ mercado-publico:
     user-key: 41186b85826e80d1a0d445a6ce67d1a3
   auth:
     url: https://servicios-prd.mercadopublico.cl
+logging:
+  level:
+    cl.zona_ti.compra_service.Scheduler: DEBUG

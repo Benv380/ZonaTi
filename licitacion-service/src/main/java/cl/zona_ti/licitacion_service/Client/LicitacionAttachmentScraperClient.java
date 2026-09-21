@@ -21,6 +21,13 @@ import org.springframework.web.client.RestClient;
  * LicitacionSyncScheduler), nunca directamente desde un request del
  * usuario: scraper-service abre un navegador real (Chromium no-headless),
  * así que es lento y no escala a demanda.
+ *
+ * Reemplaza a LicitacionAttachmentPythonScraper (Api-Prueba, invocaba el
+ * script como subproceso local) desde el split de compra-service en
+ * compra-service/licitacion-service/scraper-service -- mismo método
+ * (descargarAdjuntos) y mismo record (AttachmentFile), así que
+ * LicitacionAttachmentService/LicitacionSyncScheduler no necesitan más
+ * cambios que la referencia a esta clase.
  */
 @Component
 public class LicitacionAttachmentScraperClient {

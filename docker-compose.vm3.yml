@@ -1,0 +1,36 @@
+# SIN USAR desde 2026-09-21: se volvió a 2 VMs, Postgres se fusionó
+# dentro de docker-compose.vm2.yml (servicio "postgres"). Se deja este
+# archivo por si se reconsidera volver a 3 VMs -- no se copia a ninguna
+# VM en el despliegue actual.
+#
+# docker-compose para VM3 (base de datos, PostgreSQL propio) -- privada,
+# sin IP publica. Se corre desde acá con:
+#   docker compose -f docker-compose.vm3.yml up -d
+#
+# Un solo Postgres con las 3 bases (auth_service_db, compra_service_db,
+# licitacion_service_db) -- cada servicio ya se conecta a la suya propia,
+# no hay tablas compartidas entre bases. init-databases.sql solo corre la
+# PRIMERA vez que arranca el contenedor (cuando el volumen "pgdata" está
+# vacío) -- es el comportamiento estándar de la imagen oficial de Postgres
+# para los scripts en /docker-entrypoint-initdb.d.
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      # Publicado en la VM, pero el Network Security Group de Azure solo
+      # deja pasar trafico desde la IP privada de VM2 (y la del admin para
+      # SSH) -- no queda abierto a internet.
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${DB_USERNAME}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      # Base "puente" que exige la imagen para arrancar -- las 3 bases
+      # reales las crea init-databases.sql aparte.
+      - POSTGRES_DB=postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+    restart: unless-stopped
+
+volumes:
+  pgdata:

@@ -1,8 +1,13 @@
--- Esquema de cache/historico para compra-service (Compra Agil).
--- Este servicio es un proxy sobre la API Compra Agil v2 de Mercado Publico
--- (listado, detalle, adjuntos). Estas tablas guardan una copia local de lo
--- que se va consultando, para poder servir listados sin pegarle siempre a
--- la API externa y para conservar historico aunque la API deje de exponerlo.
+-- Esquema de cache/historico para compra-service.
+-- compra-service es un proxy sobre las APIs de Mercado Publico (Compra
+-- Agil, Adjuntos); estas tablas guardan una copia local de lo que se va
+-- consultando, para poder servir listados sin pegarle siempre a la API
+-- externa y para conservar historico aunque la API deje de exponerlo.
+--
+-- Licitaciones vive en su propia base (licitacion_service_db, ver
+-- licitacion-service/schema.sql) desde el split de compra-service en 2
+-- servicios -- ninguna tabla de acá tiene FK cruzada hacia esa base
+-- (nunca la hubo: el split de dominio ya era limpio desde antes).
 --
 -- ddl-auto esta en "none" (ver application.yml) a proposito: el esquema se
 -- controla a mano con este script. Se ejecuta solo con
@@ -53,14 +58,13 @@ CREATE TABLE IF NOT EXISTS compras_agiles (
     -- fuera el detalle completo.
     detalle_completo                BOOLEAN NOT NULL DEFAULT false,
     fecha_sync                      TIMESTAMP NOT NULL DEFAULT now(),
-    -- Copia cruda del ultimo Detalle completo recibido (ver
-    -- CompraAgilMapper.toEntity), ademas de las columnas ya mapeadas arriba
-    -- -- por si el front necesita algun campo que todavia no se mapeo a
-    -- columna propia. Solo se pisa desde el detalle completo, nunca desde
-    -- un refresco de listado.
+    -- Copia cruda del ultimo Detalle completo recibido (ver CompraAgilSyncScheduler).
+    -- Ademas de las columnas ya mapeadas arriba, por si el front necesita algun
+    -- campo que todavia no se mapeo a columna propia.
     raw_json                        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_compras_agiles_fecha_publicacion ON compras_agiles (fecha_publicacion);
+ALTER TABLE compras_agiles ADD COLUMN IF NOT EXISTS raw_json TEXT;
 
 CREATE TABLE IF NOT EXISTS compra_agil_productos_solicitados (
     id                  BIGSERIAL PRIMARY KEY,
@@ -123,11 +127,6 @@ CREATE INDEX IF NOT EXISTS idx_ca_documentos_codigo ON compra_agil_documentos (c
 -- Sin FK dura a compras_agiles: los adjuntos se listan por codigo bajo demanda
 -- (AdjuntoController) y pueden consultarse antes de que ese codigo tenga fila
 -- propia en compras_agiles. compra_agil_codigo queda como referencia logica.
---
--- OJO: "contenido" es byte[] SIN @Lob en la entidad a proposito -- con
--- @Lob, Hibernate mapea byte[] a un "Large Object" de Postgres (referenciado
--- por un OID/bigint), no a esta columna BYTEA (bug real que salio en
--- produccion la primera vez que se armo esto).
 CREATE TABLE IF NOT EXISTS adjuntos (
     id                  VARCHAR(100) PRIMARY KEY,
     compra_agil_codigo  VARCHAR(50) NOT NULL,
@@ -138,3 +137,9 @@ CREATE TABLE IF NOT EXISTS adjuntos (
     fecha_sync          TIMESTAMP NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_adjuntos_compra_agil_codigo ON adjuntos (compra_agil_codigo);
+
+-- CREATE TABLE IF NOT EXISTS no toca la tabla "adjuntos" en instalaciones que
+-- ya la tenian creada (sin estas columnas) -- se agregan a mano.
+ALTER TABLE adjuntos ADD COLUMN IF NOT EXISTS tipo_contenido VARCHAR(150);
+ALTER TABLE adjuntos ADD COLUMN IF NOT EXISTS tamano_bytes INTEGER;
+ALTER TABLE adjuntos ADD COLUMN IF NOT EXISTS contenido BYTEA;

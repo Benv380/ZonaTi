@@ -12,7 +12,27 @@ public class LicitacionDto {
             @JsonProperty("Cantidad") Integer cantidad,
             @JsonProperty("FechaCreacion") String fechaCreacion,
             @JsonProperty("Version") String version,
-            @JsonProperty("Listado") List<Licitacion> listado) {
+            @JsonProperty("Listado") List<Licitacion> listado,
+            @JsonProperty("Paginacion") Paginacion paginacion) {
+
+        // Constructor de 4 args para los usos que no paginan (busqueda por
+        // codigo puntual, por fecha) -- Paginacion queda null, el front ya
+        // sabe tratarlo como "sin paginar" (no tiene sentido paginar un
+        // resultado de un solo item).
+        public LicitacionResponse(Integer cantidad, String fechaCreacion, String version, List<Licitacion> listado) {
+            this(cantidad, fechaCreacion, version, listado, null);
+        }
+    }
+
+    // Metadata de paginacion propia (no la entrega Mercado Publico para
+    // este endpoint) -- mismo shape/nombres de campo que
+    // CompraAgilDto.Paginacion para que el front trate ambas pestañas
+    // igual.
+    public record Paginacion(
+            Integer total_paginas,
+            Integer numero_pagina,
+            Integer tamano_pagina,
+            Integer total_resultados) {
     }
 
     // Solo se declaran los campos que efectivamente se usan/guardan; el resto

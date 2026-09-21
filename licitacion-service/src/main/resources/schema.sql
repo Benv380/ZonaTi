@@ -1,10 +1,13 @@
 -- Esquema de cache/historico para licitacion-service.
--- Este servicio es un proxy sobre la API publica de Licitaciones de Mercado
--- Publico (LS/LP/LE), mas la descarga de sus adjuntos via scraping
--- (Playwright, ver scripts/descargar_adjuntos.py). Estas tablas guardan una
--- copia local de lo que se va consultando, para poder servir listados sin
--- pegarle siempre a la API externa y para conservar historico aunque la API
--- deje de exponerlo.
+-- licitacion-service es un proxy sobre la API de Licitaciones de Mercado
+-- Publico; estas tablas guardan una copia local de lo que se va
+-- consultando, para poder servir listados sin pegarle siempre a la API
+-- externa y para conservar historico aunque la API deje de exponerlo.
+--
+-- Compra Agil vive en su propia base (compra_service_db, ver
+-- compra-service/schema.sql) desde el split de compra-service en 2
+-- servicios -- ninguna tabla de acá tiene FK cruzada hacia esa base
+-- (nunca la hubo: el split de dominio ya era limpio desde antes).
 --
 -- ddl-auto esta en "none" (ver application.yml) a proposito: el esquema se
 -- controla a mano con este script. Se ejecuta solo con
@@ -66,6 +69,42 @@ CREATE TABLE IF NOT EXISTS licitaciones (
 );
 CREATE INDEX IF NOT EXISTS idx_licitaciones_fecha_publicacion ON licitaciones (fecha_publicacion);
 
+-- CREATE TABLE IF NOT EXISTS no toca una tabla que ya existe, asi que las
+-- columnas agregadas despues del deploy inicial de "licitaciones" se
+-- suman a mano aca para que las instalaciones existentes tambien las reciban.
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS dias_cierre_licitacion VARCHAR(20);
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS modalidad INTEGER;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS tipo_pago VARCHAR(20);
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS tiempo VARCHAR(20);
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS unidad_tiempo VARCHAR(20);
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS tiempo_duracion_contrato VARCHAR(20);
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS unidad_tiempo_duracion_contrato INTEGER;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS es_renovable INTEGER;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS fuente_financiamiento TEXT;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS nombre_responsable_pago TEXT;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS email_responsable_pago TEXT;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS nombre_responsable_contrato TEXT;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS email_responsable_contrato TEXT;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS fono_responsable_contrato VARCHAR(50);
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS rut_unidad VARCHAR(20);
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS codigo_unidad VARCHAR(50);
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS direccion_unidad TEXT;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS rut_usuario VARCHAR(20);
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS codigo_usuario VARCHAR(50);
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS nombre_usuario TEXT;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS cargo_usuario TEXT;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS fecha_creacion TIMESTAMP;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS fecha_inicio TIMESTAMP;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS fecha_final TIMESTAMP;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS fecha_pub_respuestas TIMESTAMP;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS fecha_acto_apertura_tecnica TIMESTAMP;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS fecha_acto_apertura_economica TIMESTAMP;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS fecha_visita_terreno TIMESTAMP;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS fecha_entrega_antecedentes TIMESTAMP;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS fecha_estimada_adjudicacion TIMESTAMP;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS fecha_estimada_firma TIMESTAMP;
+ALTER TABLE licitaciones ADD COLUMN IF NOT EXISTS fecha_soporte_fisico TIMESTAMP;
+
 -- Items (productos/servicios solicitados) del detalle de una licitacion
 -- (Listado[].Items.Listado). Solo llega en el detalle por codigo; se
 -- resincroniza entero en cada guardado (ver LicitacionMapper).
@@ -83,15 +122,10 @@ CREATE TABLE IF NOT EXISTS licitacion_items (
 );
 CREATE INDEX IF NOT EXISTS idx_licitacion_items_codigo ON licitacion_items (licitacion_codigo_externo);
 
--- Adjuntos de licitaciones normales (LS/LP/LE), bajados por
--- scraper-service (servicio Python aparte, Playwright) y orquestados por
--- LicitacionSyncScheduler. El binario se guarda completo en "contenido": no
--- hay copia en disco, la BD es la unica fuente de verdad.
---
--- OJO: "contenido" es byte[] SIN @Lob en la entidad a proposito -- con
--- @Lob, Hibernate mapea byte[] a un "Large Object" de Postgres (referenciado
--- por un OID/bigint), no a esta columna BYTEA (bug real que salio en
--- produccion la primera vez que se armo esto).
+-- Adjuntos de licitaciones normales (LS/LP/LE), bajados por scraper-service
+-- (Playwright) via LicitacionAttachmentScraperClient y orquestados por
+-- LicitacionSyncScheduler. El binario se guarda completo en "contenido":
+-- no hay copia en disco, la BD es la unica fuente de verdad.
 CREATE TABLE IF NOT EXISTS adjunto_licitacion (
     id                  BIGSERIAL PRIMARY KEY,
     codigo_licitacion   VARCHAR(50) NOT NULL REFERENCES licitaciones (codigo_externo) ON DELETE CASCADE,
@@ -102,3 +136,5 @@ CREATE TABLE IF NOT EXISTS adjunto_licitacion (
     fecha_sync          TIMESTAMP NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_adjunto_licitacion_codigo ON adjunto_licitacion (codigo_licitacion);
+ALTER TABLE adjunto_licitacion ADD COLUMN IF NOT EXISTS tipo_contenido VARCHAR(150);
+ALTER TABLE adjunto_licitacion ADD COLUMN IF NOT EXISTS contenido BYTEA;
