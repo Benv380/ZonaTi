@@ -83,4 +83,18 @@ public class CompraAgilController {
         return ResponseEntity.ok(compraAgilService.listarSegundoLlamadoCacheado(principal, authorization, pagina, tamano));
     }
 
+    // Barra de busqueda por palabra clave (ver CompraRapida.jsx) -- distinto
+    // del "/" de arriba (ese es en vivo contra Mercado Publico, con filtros
+    // avanzados y acotado por perfil para EMPRESA/USUARIO). Este busca en el
+    // cache local (nombre/descripcion/organismo comprador), rapido y sin
+    // restriccion de rol -- mismo criterio que /listar.
+    @GetMapping("/buscar")
+    public ResponseEntity<CompraAgilListadoResponse> buscarPorTexto(
+            @RequestParam String q,
+            @RequestParam(defaultValue = "1") int pagina,
+            @RequestParam(defaultValue = "15") int tamano
+    ) {
+        return ResponseEntity.ok(compraAgilService.buscarPorTexto(q, pagina, tamano));
+    }
+
 }

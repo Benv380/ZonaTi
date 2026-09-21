@@ -34,4 +34,20 @@ public interface CompraAgilRepository extends JpaRepository<CompraAgilEntity, St
             + "AND (c.fechaCierrePrimerLlamado IS NULL OR c.fechaCierrePrimerLlamado <= :ahora) "
             + "ORDER BY c.fechaCierreSegundoLlamado ASC")
     List<CompraAgilEntity> findEnSegundoLlamadoDesde(@Param("desde") LocalDateTime desde, @Param("ahora") LocalDateTime ahora);
+
+    // Barra de busqueda por palabra clave (ver CompraAgilService.buscarPorTexto):
+    // busca dentro del CACHE local (nombre/descripcion/organismo comprador,
+    // sin distinguir mayusculas), no en vivo contra Mercado Publico -- mismo
+    // criterio que findByFechaPublicacionDesde de arriba, para no agregar
+    // otra llamada externa lenta a algo que el scheduler ya sincroniza cada
+    // 10 minutos. Sin filtro de fecha (a diferencia de las 2 de arriba):
+    // una compra puntual buscada por codigo tambien queda cacheada aunque
+    // tenga mas de 48h, y una busqueda por palabra clave deberia poder
+    // encontrarla igual.
+    @Query("SELECT DISTINCT c FROM CompraAgilEntity c LEFT JOIN FETCH c.documentos "
+            + "WHERE LOWER(c.nombre) LIKE LOWER(CONCAT('%', :texto, '%')) "
+            + "OR LOWER(c.descripcion) LIKE LOWER(CONCAT('%', :texto, '%')) "
+            + "OR LOWER(c.organismoComprador) LIKE LOWER(CONCAT('%', :texto, '%')) "
+            + "ORDER BY c.fechaPublicacion DESC")
+    List<CompraAgilEntity> buscarPorTexto(@Param("texto") String texto);
 }

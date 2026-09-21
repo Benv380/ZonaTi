@@ -214,6 +214,16 @@ public class CompraAgilService {
         return paginarCacheado(compraAgilRepository.findEnSegundoLlamadoDesde(desde, ahora), pagina, tamano);
     }
 
+    // Barra de busqueda por palabra clave (ver CompraAgilController) --
+    // busca en el CACHE local, no en vivo contra Mercado Publico (esa es
+    // la busqueda por codigo exacto de getDetalleByCodigo, o la Puerta 2
+    // de buscar() para GLOBAL). Abierta a cualquier usuario autenticado,
+    // mismo criterio que listarUltimasOchoHorasCacheado (la cartera
+    // cacheada ya no se acota por perfil/asignaciones).
+    public CompraAgilListadoResponse buscarPorTexto(String texto, int pagina, int tamano) {
+        return paginarCacheado(compraAgilRepository.buscarPorTexto(texto), pagina, tamano);
+    }
+
     // Compartido por listarUltimasOchoHorasCacheado y
     // listarSegundoLlamadoCacheado -- ambos leen un universo distinto del
     // cache pero paginan igual (mismo record Paginacion que devuelve

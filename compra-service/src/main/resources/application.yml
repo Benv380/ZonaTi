@@ -21,7 +21,10 @@ spring:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: none
-    show-sql: true
+    # Apagado -- el scheduler sincroniza 15 compras (detalle + adjuntos)
+    # cada 10 minutos, y con esto en true cada ciclo imprimia una cantidad
+    # enorme de SQL al log, sin aportar nada util fuera de debug puntual.
+    show-sql: false
     properties:
       hibernate:
         format_sql: true
