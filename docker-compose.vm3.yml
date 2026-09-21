@@ -13,6 +13,7 @@
 # PRIMERA vez que arranca el contenedor (cuando el volumen "pgdata" está
 # vacío) -- es el comportamiento estándar de la imagen oficial de Postgres
 # para los scripts en /docker-entrypoint-initdb.d.
+name: zonati-vm3
 services:
   postgres:
     image: postgres:16-alpine

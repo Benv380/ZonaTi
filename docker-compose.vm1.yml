@@ -7,6 +7,17 @@
 # de Docker (viven en OTRA máquina, VM2, fuera de esta red de Compose) --
 # les habla por la IP PRIVADA de VM2 dentro de la VNet de Azure (ver
 # VM2_PRIVATE_IP en el .env de esta VM).
+#
+# "name" explicito: por defecto Compose usa el nombre de la carpeta como
+# nombre de proyecto ("zonati"), el MISMO para este archivo, el
+# docker-compose.yml de un solo host y docker-compose.vm2.yml (viven en la
+# misma carpeta) -- si alguna vez se corre "docker compose up" en esta VM
+# sin el "-f docker-compose.vm1.yml" (paso ya pisado una vez), Compose los
+# trata como el mismo proyecto y puede PISAR contenedores de este archivo
+# con los del otro (ej. el frontend termina escuchando en el puerto que
+# define el otro compose, no en el 80). Con un nombre de proyecto propio,
+# quedan aislados aunque se invoque sin "-f".
+name: zonati-vm1
 services:
   gateway-service:
     build: ./gateway-service

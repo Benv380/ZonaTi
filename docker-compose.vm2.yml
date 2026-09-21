@@ -8,6 +8,11 @@
 # por si se reconsidera), corre en este mismo host Docker. Los 3
 # servicios Java le hablan por el nombre de servicio de Compose
 # ("postgres"), resuelto por DNS interno -- no por IP.
+#
+# "name" explicito -- mismo motivo que docker-compose.vm1.yml: evita que
+# un "docker compose up" corrido sin "-f" en esta VM pise/mezcle
+# contenedores con el docker-compose.yml de un solo host.
+name: zonati-vm2
 services:
   postgres:
     image: postgres:16-alpine

@@ -1,3 +1,9 @@
+# "name" explicito -- de un solo host, para pruebas locales. Evita que un
+# "docker compose up" corrido sin "-f" en alguna VM (vm1/vm2/vm3) pise o
+# mezcle contenedores con este (ver el mismo comentario en cada
+# docker-compose.vmX.yml -- ya pasó una vez en VM1, ver commit que lo
+# corrigió).
+name: zonati-local
 services:
   # Sidecar de Tailscale: SOLO scraper-service sale por acá (IP residencial
   # como exit node, para esquivar el bloqueo por IP de datacenter que tiene
