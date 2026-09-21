@@ -47,6 +47,14 @@ public class EmpresaController {
         return ResponseEntity.ok(empresaService.listar());
     }
 
+    // Una sola empresa -- usado por el panel de detalle (ver
+    // EmpresaDetalle.jsx en el front), que puede llegar por link directo o
+    // F5 sin tener ya la lista completa cargada en memoria.
+    @GetMapping("/{id}")
+    public ResponseEntity<EmpresaResponse> obtener(@PathVariable Long id) {
+        return ResponseEntity.ok(empresaService.obtener(id));
+    }
+
     @PutMapping("/{id}")
     public ResponseEntity<EmpresaResponse> actualizar(@PathVariable Long id, @Valid @RequestBody CrearEmpresaRequest request) {
         return ResponseEntity.ok(empresaService.actualizar(id, request));

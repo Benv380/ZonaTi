@@ -42,6 +42,14 @@ public class EmpresaService {
                 .toList();
     }
 
+    // Usado por el panel de detalle de una empresa (ver Administracion.jsx
+    // -> EmpresaDetalle.jsx): antes esa pantalla no existia y alcanzaba con
+    // encontrar la empresa dentro de la lista ya cargada en memoria, pero un
+    // link directo (o F5) necesita poder traerla sola.
+    public EmpresaResponse obtener(Long id) {
+        return toResponse(obtenerEmpresa(id));
+    }
+
     public EmpresaResponse actualizar(Long id, CrearEmpresaRequest request) {
         Empresa empresa = obtenerEmpresa(id);
         aplicarDatos(empresa, request);
