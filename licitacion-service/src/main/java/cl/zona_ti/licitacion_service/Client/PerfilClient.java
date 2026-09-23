@@ -1,8 +1,10 @@
 package cl.zona_ti.licitacion_service.Client;
 
 import java.time.Duration;
+import java.util.List;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -10,10 +12,10 @@ import org.springframework.web.client.RestClient;
 import cl.zona_ti.licitacion_service.Dto.PerfilBusquedaDto;
 
 // Le pega EN VIVO a auth-service (mismo patron que AsignacionClient) para
-// traer el filtro de la empresa (rubro/palabras clave/region) del usuario
-// autenticado -- reenvia el mismo header "Authorization" que trajo la
-// request original, auth-service identifica la empresa por el JWT, nunca
-// se manda un empresaId (evita pedir el perfil de otra empresa).
+// traer los filtros de la empresa (rubro/palabras clave/region) del
+// usuario autenticado -- reenvia el mismo header "Authorization" que trajo
+// la request original, auth-service identifica la empresa por el JWT,
+// nunca se manda un empresaId (evita pedir el perfil de otra empresa).
 @Component
 public class PerfilClient {
 
@@ -34,11 +36,14 @@ public class PerfilClient {
                 .build();
     }
 
-    public PerfilBusquedaDto miPerfil(String authorizationHeader) {
+    // Multi-filtro (2026-09-23): devuelve TODOS los filtros de la empresa
+    // del usuario, no uno solo.
+    public List<PerfilBusquedaDto> misPerfiles(String authorizationHeader) {
         return restClient.get()
                 .uri("/auth/perfil/me")
                 .header("Authorization", authorizationHeader)
                 .retrieve()
-                .body(PerfilBusquedaDto.class);
+                .body(new ParameterizedTypeReference<List<PerfilBusquedaDto>>() {
+                });
     }
 }

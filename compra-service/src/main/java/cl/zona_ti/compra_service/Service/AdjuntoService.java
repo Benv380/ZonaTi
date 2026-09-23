@@ -9,7 +9,6 @@ import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -31,10 +30,6 @@ public class AdjuntoService {
     private final TokenCacheService tokenCacheService;
     private final AdjuntoRepository adjuntoRepository;
 
-    // Mismo TTL que Licitacion/CompraAgil (ver esos Service).
-    @Value("${compra-service.cache.ttl-minutos:10}")
-    private long ttlMinutos;
-
     public AdjuntoService(AdjuntoClient adjuntoClient, TokenCacheService tokenCacheService,
             AdjuntoRepository adjuntoRepository) {
         this.adjuntoClient = adjuntoClient;
@@ -42,15 +37,26 @@ public class AdjuntoService {
         this.adjuntoRepository = adjuntoRepository;
     }
 
-    public AdjuntoListadoResponse listar(String codigoCompra) {
-        List<AdjuntoEntity> cacheados = adjuntoRepository.findByCompraAgilCodigo(codigoCompra);
-        if (!cacheados.isEmpty() && estanFrescos(cacheados)) {
-            return construirRespuestaDesdeCache(cacheados);
-        }
-
+    // Uso EXCLUSIVO de sincronizarBinarios (via CompraAgilSyncScheduler) --
+    // esta es la UNICA via que le pega en vivo a Mercado Publico para el
+    // listado de adjuntos, es lo que alimenta la cache. No confundir con
+    // listar() de abajo (esa es 100% cache, la usa el usuario).
+    private AdjuntoListadoResponse sincronizarListado(String codigoCompra) {
         AdjuntoListadoResponse respuesta = adjuntoClient.listar(codigoCompra);
         guardarEnCache(codigoCompra, respuesta);
         return respuesta;
+    }
+
+    // 100% CACHE, nunca en vivo (mismo criterio que CompraAgilService.
+    // getDetalleByCodigo -- la base tiene que sostener el sistema aunque
+    // Mercado Publico este caido/lento). Si todavia no se sincronizo nada
+    // para este codigo, devuelve lista vacia -- a diferencia del detalle,
+    // ac치 no hace falta un mensaje de error especial: "sin adjuntos" y
+    // "todavia no sincronizado" se ven exactamente igual en la interfaz, y
+    // la mayoria de las compras genuinamente no tienen ningun adjunto.
+    public AdjuntoListadoResponse listar(String codigoCompra) {
+        List<AdjuntoEntity> cacheados = adjuntoRepository.findByCompraAgilCodigo(codigoCompra);
+        return construirRespuestaDesdeCache(cacheados);
     }
 
     public ResponseEntity<byte[]> descargar(String uuid) {
@@ -94,7 +100,7 @@ public class AdjuntoService {
     // CompraAgilSyncScheduler), nunca desde un request de usuario -- puede
     // implicar varias descargas secuenciales.
     public void sincronizarBinarios(String codigoCompra) {
-        listar(codigoCompra); // asegura que el listado (metadata) este al dia
+        sincronizarListado(codigoCompra); // asegura que el listado (metadata) este al dia
 
         List<AdjuntoEntity> pendientes = adjuntoRepository.findByCompraAgilCodigo(codigoCompra).stream()
                 .filter(a -> a.getContenido() == null)
@@ -174,10 +180,5 @@ public class AdjuntoService {
         } catch (Exception ignored) {
             // Un fallo al escribir en la cache no debe tumbar la respuesta al usuario.
         }
-    }
-
-    private boolean estanFrescos(List<AdjuntoEntity> cacheados) {
-        LocalDateTime limite = LocalDateTime.now().minusMinutes(ttlMinutos);
-        return cacheados.stream().allMatch(entity -> entity.getFechaSync() != null && entity.getFechaSync().isAfter(limite));
     }
 }

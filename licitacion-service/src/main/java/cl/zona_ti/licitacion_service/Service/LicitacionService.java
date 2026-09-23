@@ -8,6 +8,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -71,16 +72,21 @@ public class LicitacionService {
     // es visible para cualquier usuario autenticado, asignaciones ahora
     // solo trackea el trabajo propio ("Mis activas" en el front), no la
     // visibilidad del catalogo.
+    //
+    // 100% CACHE, nunca en vivo (decision 2026-09-23: la base tiene que
+    // sostener el sistema aunque Mercado Publico este caido/lento -- antes
+    // esto le pegaba en vivo como respaldo cuando no encontraba nada
+    // cacheado, y ese respaldo era la fuente de los timeouts). El detalle
+    // completo es lo unico que se guarda en licitacionRepository (el
+    // listado por fecha, resumido, nunca se cachea -- ver comentario en
+    // getLicitacionesPorFecha), asi que estar presente ya alcanza, no hace
+    // falta chequear "frescura" aca (a diferencia de obtenerDetalleSeguro,
+    // que sigue usando estaFresca() para decidir si vale la pena pedirla
+    // de nuevo durante el sync).
     public LicitacionResponse getLicitacionByCodigo(String codigo, AuthenticatedPrincipal principal, String authorizationHeader) {
         Optional<LicitacionEntity> cacheada = licitacionRepository.findByIdConItems(codigo);
-        if (cacheada.isPresent() && estaFresca(cacheada.get())) {
+        if (cacheada.isPresent()) {
             return new LicitacionResponse(1, null, null, List.of(licitacionMapper.toDto(cacheada.get())));
-        }
-
-        LicitacionResponse respuesta = licitacionClient.getLicitacionByCodigo(codigo);
-        if (respuesta != null && respuesta.listado() != null && !respuesta.listado().isEmpty()) {
-            guardarEnCache(respuesta.listado().get(0));
-            return respuesta;
         }
 
         // El codigo tal cual no encontro nada -- puede que el usuario lo
@@ -101,7 +107,7 @@ public class LicitacionService {
             }
         }
 
-        return respuesta;
+        return new LicitacionResponse(0, null, null, List.of());
     }
 
     private static String normalizarParaComparar(String valor) {
@@ -236,29 +242,40 @@ public class LicitacionService {
     //
     // GLOBAL no tiene empresa -- para ese caso esto devuelve lo mismo que
     // "ver todo" (no hay perfil que aplicar). EMPRESA/USUARIO: si la
-    // empresa no completo su perfil todavia (ver PerfilBusquedaResponse.
-    // perfilCompletado, siempre false hasta conectar el onboarding con
-    // LLM) o auth-service no responde, se devuelve vacio -- mismo criterio
-    // "fail closed" que el resto de los filtros por perfil.
+    // empresa no tiene ningun filtro guardado, o auth-service no responde,
+    // se devuelve vacio -- mismo criterio "fail closed" que el resto de
+    // los filtros por perfil. Multi-filtro (2026-09-23): una empresa puede
+    // tener VARIOS filtros -- se busca la UNION de todos (una licitacion
+    // aparece si matchea AL MENOS uno), deduplicando por codigoExterno.
     public LicitacionResponse buscarConFiltroEmpresa(AuthenticatedPrincipal principal, String authorizationHeader, int pagina, int tamano) {
         if (principal == null || principal.alcance() == Alcance.GLOBAL) {
             return listarUltimosDiasCacheado(principal, authorizationHeader, pagina, tamano);
         }
 
-        PerfilBusquedaDto perfil = obtenerPerfil(authorizationHeader);
-        if (perfil == null || !perfil.perfilCompletado()) {
+        List<PerfilBusquedaDto> perfiles = obtenerPerfiles(authorizationHeader);
+        if (perfiles.isEmpty()) {
             return new LicitacionResponse(0, null, null, List.of());
         }
 
         LocalDateTime desde = ZonedDateTime.now(ZONA_CHILE).minusDays(diasListado).toLocalDateTime();
-        List<String> palabras = List.of(perfil.palabrasClave().toLowerCase().split("\\s+"));
-
-        List<Licitacion> listado = licitacionRepository.findByFechaPublicacionDesde(desde).stream()
+        List<Licitacion> cacheadas = licitacionRepository.findByFechaPublicacionDesde(desde).stream()
                 .map(licitacionMapper::toDto)
-                .filter(l -> coincideConPerfil(l, palabras, perfil.regionNombre()))
                 .toList();
 
-        return paginar(listado, pagina, tamano);
+        LinkedHashMap<String, Licitacion> combinadas = new LinkedHashMap<>();
+        for (PerfilBusquedaDto perfil : perfiles) {
+            if (perfil.palabrasClave() == null || perfil.palabrasClave().isBlank()) {
+                continue;
+            }
+            List<String> palabras = List.of(perfil.palabrasClave().toLowerCase().split("\\s+"));
+            for (Licitacion licitacion : cacheadas) {
+                if (coincideConPerfil(licitacion, palabras, perfil.regionNombre())) {
+                    combinadas.putIfAbsent(licitacion.codigoExterno(), licitacion);
+                }
+            }
+        }
+
+        return paginar(List.copyOf(combinadas.values()), pagina, tamano);
     }
 
     // Recorta "listado" (ya ordenado por fecha de publicacion DESC, ver
@@ -294,11 +311,11 @@ public class LicitacionService {
         return regionLicitacion != null && regionLicitacion.toLowerCase().contains(regionNombre.toLowerCase());
     }
 
-    private PerfilBusquedaDto obtenerPerfil(String authorizationHeader) {
+    private List<PerfilBusquedaDto> obtenerPerfiles(String authorizationHeader) {
         try {
-            return perfilClient.miPerfil(authorizationHeader);
+            return perfilClient.misPerfiles(authorizationHeader);
         } catch (Exception e) {
-            return null;
+            return List.of();
         }
     }
 

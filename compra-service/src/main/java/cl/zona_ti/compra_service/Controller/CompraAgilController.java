@@ -97,4 +97,21 @@ public class CompraAgilController {
         return ResponseEntity.ok(compraAgilService.buscarPorTexto(q, pagina, tamano));
     }
 
+    // "Ver mi filtro" en CompraRapida.jsx -- reemplaza el viejo "/" (Puerta
+    // 2, en vivo contra Mercado Publico) para este uso puntual: busca en el
+    // cache local acotado por el rubro/palabras clave/region del perfil de
+    // la empresa del usuario autenticado. No recibe filtros por query
+    // string a proposito (a diferencia de "/") -- siempre usa el perfil
+    // propio, nunca lo que mande el cliente, mismo motivo de seguridad que
+    // ya tenia buscar().
+    @GetMapping("/mi-filtro")
+    public ResponseEntity<CompraAgilListadoResponse> buscarPorPerfil(
+            @AuthenticationPrincipal AuthenticatedPrincipal principal,
+            @RequestHeader("Authorization") String authorization,
+            @RequestParam(defaultValue = "1") int pagina,
+            @RequestParam(defaultValue = "15") int tamano
+    ) {
+        return ResponseEntity.ok(compraAgilService.buscarPorPerfil(principal, authorization, pagina, tamano));
+    }
+
 }

@@ -187,8 +187,9 @@ ALTER TABLE users ADD CONSTRAINT fk_users_role FOREIGN KEY (role_id) REFERENCES 
 ALTER TABLE users DROP CONSTRAINT IF EXISTS fk_users_empresa;
 ALTER TABLE users ADD CONSTRAINT fk_users_empresa FOREIGN KEY (empresa_id) REFERENCES empresas(id);
 
--- Filtro de busqueda generado por el LLM en el onboarding (ver
--- PerfilController/OpenAiClient) -- 1:1 con empresas, no con users.
+-- Filtro de busqueda de una empresa (rubro/palabras clave/region) -- N:1
+-- con empresas, no con users (todos los usuarios de una empresa heredan
+-- los mismos filtros).
 CREATE TABLE IF NOT EXISTS perfil_busqueda (
     empresa_id          BIGINT PRIMARY KEY REFERENCES empresas(id),
     rubro                VARCHAR(100),
@@ -198,6 +199,28 @@ CREATE TABLE IF NOT EXISTS perfil_busqueda (
     perfil_completado    BOOLEAN NOT NULL DEFAULT false,
     actualizado_en       TIMESTAMP
 );
+
+-- Multi-filtro (2026-09-23): una empresa puede tener VARIOS filtros
+-- guardados a la vez, no uno solo -- Compra Agil ("Ver mi filtro", ver
+-- CompraAgilService.buscarPorPerfil en compra-service) busca la UNION de
+-- todos, no uno unico. Migracion: la tabla ya existia con empresa_id como
+-- PK (relacion 1:1) -- se le agrega un "id" propio y se mueve la PK ahi
+-- (empresa_id sigue existiendo, deja de ser unico, puede repetirse una
+-- fila por cada filtro de la misma empresa), mas "nombre" para poder
+-- distinguir cada uno en la interfaz (ej. "Construcción RM", "Electricidad
+-- Valparaíso"). "perfil_completado" queda sin usar de ahora en mas (una
+-- fila que existe ya esta "completa" por definicion) -- no se borra la
+-- columna, mismo criterio de siempre (nunca DROP COLUMN automatico).
+ALTER TABLE perfil_busqueda ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+ALTER TABLE perfil_busqueda DROP CONSTRAINT IF EXISTS perfil_busqueda_pkey;
+ALTER TABLE perfil_busqueda ADD CONSTRAINT perfil_busqueda_pkey PRIMARY KEY (id);
+
+ALTER TABLE perfil_busqueda ADD COLUMN IF NOT EXISTS nombre VARCHAR(100);
+UPDATE perfil_busqueda SET nombre = 'Principal' WHERE nombre IS NULL;
+ALTER TABLE perfil_busqueda ALTER COLUMN nombre SET NOT NULL;
+
+-- Ya no viene gratis con la PK (antes empresa_id era la PK, indexada sola).
+CREATE INDEX IF NOT EXISTS idx_perfil_busqueda_empresa ON perfil_busqueda (empresa_id);
 
 -- Asignacion manual e individual de una licitacion/compra agil puntual a
 -- un usuario -- capa ADICIONAL sobre perfil_busqueda, no un reemplazo: el

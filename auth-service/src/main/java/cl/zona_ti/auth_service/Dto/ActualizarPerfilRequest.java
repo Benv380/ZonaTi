@@ -2,11 +2,13 @@ package cl.zona_ti.auth_service.Dto;
 
 import jakarta.validation.constraints.NotBlank;
 
-// Seteo manual del perfil por ahora (rubro/palabras clave/region a mano) --
-// mas adelante el endpoint de onboarding con LLM va a llamar al MISMO
-// PerfilBusquedaService.actualizar() con los valores que extraiga del
-// texto libre, en vez de que el usuario los escriba el mismo aca.
+// Crear/editar UN filtro de busqueda (rubro/palabras clave/region a mano
+// por ahora). Se usa tanto para crear (POST) como para editar (PUT) --
+// misma forma en los dos casos.
 public class ActualizarPerfilRequest {
+
+    @NotBlank(message = "El nombre del filtro es obligatorio")
+    private String nombre;
 
     @NotBlank(message = "El rubro es obligatorio")
     private String rubro;
@@ -20,6 +22,14 @@ public class ActualizarPerfilRequest {
     private String regionNombre;
 
     public ActualizarPerfilRequest() {
+    }
+
+    public String getNombre() {
+        return nombre;
+    }
+
+    public void setNombre(String nombre) {
+        this.nombre = nombre;
     }
 
     public String getRubro() {

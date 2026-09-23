@@ -4,11 +4,12 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -16,6 +17,7 @@ import java.util.List;
 import cl.zona_ti.compra_service.Client.CompraAgilClient;
 import cl.zona_ti.compra_service.Client.PerfilClient;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilDetalleResponse;
+import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilError;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilListadoResponse;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.Detalle;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.Item;
@@ -39,11 +41,6 @@ public class CompraAgilService {
     // Tamaño de pagina por defecto para /listar -- ver
     // listarUltimasOchoHorasCacheado().
     private static final int TAMANO_PAGINA_DEFECTO = 15;
-
-    // Mismo TTL que Licitacion (ver LicitacionService): tiempo que se considera
-    // fresco un detalle cacheado antes de volver a pedirlo a la API real.
-    @Value("${compra-service.cache.ttl-minutos:10}")
-    private long ttlMinutos;
 
     public CompraAgilService(CompraAgilClient compraAgilClient, CompraAgilRepository compraAgilRepository,
             CompraAgilMapper compraAgilMapper, PerfilClient perfilClient) {
@@ -95,12 +92,84 @@ public class CompraAgilService {
         return listar(filtrosDesdePerfil);
     }
 
+    // "Ver mi filtro" en Compra Agil (ver CompraAgilController) -- antes
+    // pegaba EN VIVO a Mercado Publico en cada clic (Puerta 2, buscar()),
+    // que es lento (ver conversacion: hasta 20s por la API externa). Ahora
+    // busca en el CACHE local ya sincronizado (mismo mecanismo que
+    // buscarPorTexto), acotado por el rubro/palabras clave/region de los
+    // filtros de la empresa -- rapido, sin pegarle a la API externa.
+    //
+    //   - GLOBAL (o sin empresa): no tiene filtros propios, no tiene
+    //     sentido "mi filtro" -- se le devuelve lo mismo que /listar
+    //     (cache completo, sin acotar).
+    //   - EMPRESA/USUARIO sin ningun filtro guardado: mismo criterio "fail
+    //     closed" que antes -- vacio en vez de mostrar todo.
+    //   - Multi-filtro (2026-09-23): una empresa puede tener VARIOS
+    //     filtros guardados -- se busca la UNION de todos (una compra
+    //     aparece si matchea AL MENOS uno), deduplicando por codigo.
+    public CompraAgilListadoResponse buscarPorPerfil(AuthenticatedPrincipal principal, String authorizationHeader, int pagina, int tamano) {
+        if (principal == null || principal.alcance() == Alcance.GLOBAL) {
+            return listarUltimasOchoHorasCacheado(principal, authorizationHeader, pagina, tamano);
+        }
+
+        List<PerfilBusquedaDto> perfiles;
+        try {
+            perfiles = perfilClient.misPerfiles(authorizationHeader);
+        } catch (Exception e) {
+            perfiles = List.of();
+        }
+        if (perfiles.isEmpty()) {
+            return new CompraAgilListadoResponse("true", null, new Listado(List.of(), new Paginacion(1, 1, 0, 0)), null);
+        }
+
+        // LinkedHashMap para deduplicar por codigo sin perder del todo el
+        // orden (cada sub-busqueda ya viene ordenada por fecha_publicacion
+        // desc; se reordena igual abajo por si se mezclaron).
+        LinkedHashMap<String, CompraAgilEntity> combinadas = new LinkedHashMap<>();
+        for (PerfilBusquedaDto perfil : perfiles) {
+            String texto = perfil.palabrasClave() != null ? perfil.palabrasClave() : "";
+            Integer region = parseRegion(perfil.regionCodigo());
+            for (CompraAgilEntity entidad : compraAgilRepository.buscarPorTextoYRegion(texto, region)) {
+                combinadas.putIfAbsent(entidad.getCodigo(), entidad);
+            }
+        }
+        List<CompraAgilEntity> ordenadas = combinadas.values().stream()
+                .sorted(Comparator.comparing(CompraAgilEntity::getFechaPublicacion, Comparator.nullsLast(Comparator.reverseOrder())))
+                .toList();
+        return paginarCacheado(ordenadas, pagina, tamano);
+    }
+
+    private Integer parseRegion(String regionCodigo) {
+        if (regionCodigo == null || regionCodigo.isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(regionCodigo.trim());
+        } catch (NumberFormatException ignored) {
+            // Codigo de region invalido/no numerico -- se ignora el filtro
+            // de region en vez de tirar error, mismo criterio "no bloquear
+            // al usuario por un dato mal cargado" que el resto del service.
+            return null;
+        }
+    }
+
+    // Usado SOLO por buscar() (Puerta 2, en vivo contra Mercado Publico) --
+    // desde que "Ver mi filtro" se movio al cache (buscarPorPerfil, arriba)
+    // esta Puerta 2 quedo secundaria para EMPRESA/USUARIO (el front ya no
+    // la llama para ese rol). Mercado Publico solo acepta UN q=/region= por
+    // llamada -- con multi-filtro no hay forma de mandarle la union de
+    // varios en una sola request externa, asi que se usa el PRIMER filtro
+    // guardado nomas (no todos). Si esto se vuelve a necesitar de verdad
+    // para varios filtros, la alternativa es una llamada a Mercado Publico
+    // por filtro y mezclar del lado nuestro -- no se hizo por ahora porque
+    // no hay ningun caso de uso real que dependa de esto.
     private Map<String, String> filtrosDesdePerfil(String authorizationHeader) {
         try {
-            PerfilBusquedaDto perfil = perfilClient.miPerfil(authorizationHeader);
-            if (perfil == null || !perfil.perfilCompletado()) {
+            List<PerfilBusquedaDto> perfiles = perfilClient.misPerfiles(authorizationHeader);
+            if (perfiles.isEmpty()) {
                 return Map.of();
             }
+            PerfilBusquedaDto perfil = perfiles.get(0);
             Map<String, String> filtros = new HashMap<>();
             if (perfil.palabrasClave() != null && !perfil.palabrasClave().isBlank()) {
                 filtros.put("q", perfil.palabrasClave());
@@ -114,43 +183,55 @@ public class CompraAgilService {
         }
     }
 
-    // Uso interno (CompraAgilSyncScheduler, corre en background sin ningun
-    // usuario/request de por medio) -- sin principal, no hay nada que
-    // filtrar.
-    public CompraAgilDetalleResponse getDetalleByCodigo(String codigo) {
-        return getDetalleByCodigo(codigo, null, null);
+    // Uso EXCLUSIVO de CompraAgilSyncScheduler (corre en background, sin
+    // ningun usuario/request de por medio) -- esta es la UNICA via que le
+    // pega en vivo a Mercado Publico para el detalle, es literalmente lo
+    // que alimenta la cache. No confundir con getDetalleByCodigo() de
+    // abajo (esa es 100% cache, la usa el usuario).
+    public CompraAgilDetalleResponse sincronizarDetalle(String codigo) {
+        CompraAgilDetalleResponse respuesta = compraAgilClient.getDetalleByCodigo(codigo);
+        if (respuesta != null && respuesta.payload() != null) {
+            guardarDetalleEnCache(respuesta.payload());
+        }
+        return respuesta;
     }
 
     // Busqueda por codigo puntual -- ya no se acota por asignaciones (ver
     // listarUltimasOchoHorasCacheado): el catalogo completo es visible
     // para cualquier usuario autenticado.
+    //
+    // 100% CACHE, nunca en vivo (decision 2026-09-23: la base tiene que
+    // sostener el sistema aunque Mercado Publico este caido/lento -- antes
+    // esto le pegaba en vivo a la API externa como respaldo cuando no
+    // encontraba nada cacheado, y ese respaldo era justo la fuente de los
+    // timeouts que hacian sentir "lenta" la pagina cuando Mercado Publico
+    // tardaba). Si el codigo todavia no fue sincronizado, se devuelve un
+    // error explicito en vez de colgarse esperando una respuesta externa
+    // -- CompraAgilSyncScheduler (ver sincronizarDetalle arriba) es quien
+    // la va a traer en su proximo ciclo si es una compra real reciente.
     public CompraAgilDetalleResponse getDetalleByCodigo(String codigo, AuthenticatedPrincipal principal, String authorizationHeader) {
         Optional<CompraAgilEntity> cacheada = compraAgilRepository.findById(codigo);
-        if (cacheada.isPresent() && esDetalleFresco(cacheada.get())) {
+        if (cacheada.isPresent() && Boolean.TRUE.equals(cacheada.get().getDetalleCompleto())) {
             return new CompraAgilDetalleResponse("true", null, compraAgilMapper.toDetalleDto(cacheada.get()), null);
         }
 
-        CompraAgilDetalleResponse respuesta = compraAgilClient.getDetalleByCodigo(codigo);
-        if (respuesta != null && respuesta.payload() != null) {
-            guardarDetalleEnCache(respuesta.payload());
-            return respuesta;
-        }
-
-        // Mismo criterio que LicitacionService.getLicitacionByCodigo: si
-        // el codigo tal cual no encontro nada, se busca en el cache local
-        // (ultimas 48h) un codigo cuya version normalizada (sin simbolos,
+        // Mismo criterio de siempre: si el codigo tal cual no matchea, se
+        // busca en cache un codigo cuya version normalizada (sin simbolos,
         // en mayusculas) coincida EXACTO -- tolera mayuscula/minuscula,
         // espacios y guiones de mas/de menos, pero nunca "adivina" un
         // digito -- solo compara contra codigos REALES ya sincronizados.
         String codigoReal = buscarCodigoNormalizado(codigo);
         if (codigoReal != null) {
             Optional<CompraAgilEntity> porNormalizado = compraAgilRepository.findById(codigoReal);
-            if (porNormalizado.isPresent()) {
+            if (porNormalizado.isPresent() && Boolean.TRUE.equals(porNormalizado.get().getDetalleCompleto())) {
                 return new CompraAgilDetalleResponse("true", null, compraAgilMapper.toDetalleDto(porNormalizado.get()), null);
             }
         }
 
-        return respuesta;
+        return new CompraAgilDetalleResponse("false", null, null, List.of(
+                new CompraAgilError("cache-pendiente",
+                        "Todavía no se sincronizó esta compra ágil. El sistema la sincroniza automáticamente cada 10 minutos -- volvé a intentar en un rato.",
+                        null)));
     }
 
     private static String normalizarParaComparar(String valor) {
@@ -261,11 +342,5 @@ public class CompraAgilService {
             compraAgilRepository.save(compraAgilMapper.toEntity(detalle, existente, LocalDateTime.now()));
         } catch (Exception ignored) {
         }
-    }
-
-    private boolean esDetalleFresco(CompraAgilEntity entity) {
-        LocalDateTime fechaSync = entity.getFechaSync();
-        boolean tieneDetalleCompleto = Boolean.TRUE.equals(entity.getDetalleCompleto());
-        return tieneDetalleCompleto && fechaSync != null && fechaSync.isAfter(LocalDateTime.now().minusMinutes(ttlMinutos));
     }
 }

@@ -63,7 +63,7 @@ public class CompraAgilSyncScheduler {
 
     private void sincronizarUno(String codigo) {
         try {
-            compraAgilService.getDetalleByCodigo(codigo);
+            compraAgilService.sincronizarDetalle(codigo);
         } catch (Exception e) {
             log.warn("Sync compra agil: detalle de {} FALLÓ: {}", codigo, e.getMessage());
         }

@@ -50,4 +50,20 @@ public interface CompraAgilRepository extends JpaRepository<CompraAgilEntity, St
             + "OR LOWER(c.organismoComprador) LIKE LOWER(CONCAT('%', :texto, '%')) "
             + "ORDER BY c.fechaPublicacion DESC")
     List<CompraAgilEntity> buscarPorTexto(@Param("texto") String texto);
+
+    // "Ver mi filtro" en Compra Agil (ver CompraAgilService.buscarPorPerfil)
+    // -- mismo cache que buscarPorTexto, pero ademas acotado por region
+    // cuando la empresa tiene una configurada en su perfil_busqueda
+    // (":region IS NULL" deja pasar todas las regiones si no configuro
+    // ninguna). "texto" son las palabras clave del perfil -- si vienen
+    // vacias ("%%"), el LIKE matchea cualquier cosa, asi que en ese caso
+    // el filtro real termina siendo solo la region (o nada, si tampoco hay
+    // region).
+    @Query("SELECT DISTINCT c FROM CompraAgilEntity c LEFT JOIN FETCH c.documentos "
+            + "WHERE (LOWER(c.nombre) LIKE LOWER(CONCAT('%', :texto, '%')) "
+            + "OR LOWER(c.descripcion) LIKE LOWER(CONCAT('%', :texto, '%')) "
+            + "OR LOWER(c.organismoComprador) LIKE LOWER(CONCAT('%', :texto, '%'))) "
+            + "AND (:region IS NULL OR c.region = :region) "
+            + "ORDER BY c.fechaPublicacion DESC")
+    List<CompraAgilEntity> buscarPorTextoYRegion(@Param("texto") String texto, @Param("region") Integer region);
 }

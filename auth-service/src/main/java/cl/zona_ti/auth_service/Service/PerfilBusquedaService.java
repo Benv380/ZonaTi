@@ -1,6 +1,7 @@
 package cl.zona_ti.auth_service.Service;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
@@ -26,45 +27,74 @@ public class PerfilBusquedaService {
         this.empresaRepository = empresaRepository;
     }
 
-    // Lo llama compra-service EN VIVO (ver PerfilClient/CompraAgilService
-    // alli) en cada busqueda de un usuario EMPRESA/USUARIO, para armar el
-    // q=/region= automaticamente en vez de confiar en lo que mande el
-    // cliente. Roles GLOBAL no tienen empresa -- no tiene sentido que
-    // llamen esto (compra-service ni deberia intentarlo, ver ahi), asi que
-    // ac se rechaza explicito en vez de devolver cualquier cosa.
-    public PerfilBusquedaResponse miPerfil(AuthenticatedPrincipal principal) {
+    // Lo llama compra-service EN VIVO (ver PerfilClient alli), reenviando
+    // el mismo Bearer token del usuario -- devuelve TODOS los filtros de la
+    // empresa del usuario autenticado (antes era uno solo). Roles GLOBAL no
+    // tienen empresa -- no tiene sentido que llamen esto, se rechaza
+    // explicito en vez de devolver cualquier cosa (mismo criterio que
+    // antes).
+    public List<PerfilBusquedaResponse> misPerfiles(AuthenticatedPrincipal principal) {
         if (principal.empresaId() == null) {
             throw new IllegalArgumentException("El usuario autenticado no pertenece a una empresa");
         }
-        return perfilBusquedaRepository.findById(principal.empresaId())
-                .map(this::toResponse)
-                .orElse(PerfilBusquedaResponse.vacio(principal.empresaId()));
+        return listarPorEmpresa(principal.empresaId());
     }
 
-    // Seteo manual por ahora (ver comentario en ActualizarPerfilRequest) --
-    // GLOBAL puede tocar cualquier empresa, EMPRESA solo la propia (mismo
-    // patron de permiso que UsuarioService/AsignacionService).
-    public PerfilBusquedaResponse actualizar(Long empresaId, ActualizarPerfilRequest request, AuthenticatedPrincipal actor) {
+    // Panel de administracion (Mi Empresa / Administracion) -- GLOBAL
+    // cualquier empresa, EMPRESA solo la propia (ver verificarPermiso).
+    public List<PerfilBusquedaResponse> listar(Long empresaId, AuthenticatedPrincipal actor) {
         verificarPermiso(empresaId, actor);
+        return listarPorEmpresa(empresaId);
+    }
 
+    private List<PerfilBusquedaResponse> listarPorEmpresa(Long empresaId) {
+        return perfilBusquedaRepository.findByEmpresaIdOrderById(empresaId).stream()
+                .map(this::toResponse)
+                .toList();
+    }
+
+    public PerfilBusquedaResponse crear(Long empresaId, ActualizarPerfilRequest request, AuthenticatedPrincipal actor) {
+        verificarPermiso(empresaId, actor);
         Empresa empresa = empresaRepository.findById(empresaId)
                 .orElseThrow(() -> new EntityNotFoundException("Empresa no encontrada: " + empresaId));
 
-        PerfilBusqueda perfil = perfilBusquedaRepository.findById(empresaId).orElseGet(() -> {
-            PerfilBusqueda nuevo = new PerfilBusqueda();
-            nuevo.setEmpresa(empresa);
-            return nuevo;
-        });
+        PerfilBusqueda perfil = new PerfilBusqueda();
+        perfil.setEmpresa(empresa);
+        aplicarDatos(perfil, request);
 
+        return toResponse(perfilBusquedaRepository.save(perfil));
+    }
+
+    // "perfilId" identifica al filtro directamente -- a diferencia de
+    // crear() no hace falta empresaId en la URL, el permiso se verifica
+    // contra la empresa DUEÑA de ese filtro puntual (evita que alguien
+    // edite el filtro de otra empresa mandando cualquier id).
+    public PerfilBusquedaResponse actualizar(Long perfilId, ActualizarPerfilRequest request, AuthenticatedPrincipal actor) {
+        PerfilBusqueda perfil = obtenerPerfil(perfilId);
+        verificarPermiso(perfil.getEmpresa().getId(), actor);
+        aplicarDatos(perfil, request);
+        return toResponse(perfilBusquedaRepository.save(perfil));
+    }
+
+    public void eliminar(Long perfilId, AuthenticatedPrincipal actor) {
+        PerfilBusqueda perfil = obtenerPerfil(perfilId);
+        verificarPermiso(perfil.getEmpresa().getId(), actor);
+        perfilBusquedaRepository.delete(perfil);
+    }
+
+    private void aplicarDatos(PerfilBusqueda perfil, ActualizarPerfilRequest request) {
+        perfil.setNombre(request.getNombre());
         perfil.setRubro(request.getRubro());
         perfil.setPalabrasClave(request.getPalabrasClave());
         perfil.setRegionCodigo(request.getRegionCodigo());
         perfil.setRegionNombre(request.getRegionNombre());
         perfil.setPerfilCompletado(true);
         perfil.setActualizadoEn(LocalDateTime.now());
+    }
 
-        PerfilBusqueda guardado = perfilBusquedaRepository.save(perfil);
-        return toResponse(guardado);
+    private PerfilBusqueda obtenerPerfil(Long perfilId) {
+        return perfilBusquedaRepository.findById(perfilId)
+                .orElseThrow(() -> new EntityNotFoundException("Filtro no encontrado: " + perfilId));
     }
 
     private void verificarPermiso(Long empresaId, AuthenticatedPrincipal actor) {
@@ -78,11 +108,12 @@ public class PerfilBusquedaService {
 
     private PerfilBusquedaResponse toResponse(PerfilBusqueda perfil) {
         return new PerfilBusquedaResponse(
-                perfil.getEmpresaId(),
+                perfil.getId(),
+                perfil.getEmpresa().getId(),
+                perfil.getNombre(),
                 perfil.getRubro(),
                 perfil.getPalabrasClave(),
                 perfil.getRegionCodigo(),
-                perfil.getRegionNombre(),
-                Boolean.TRUE.equals(perfil.getPerfilCompletado()));
+                perfil.getRegionNombre());
     }
 }
