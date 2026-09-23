@@ -230,7 +230,7 @@ public class CompraAgilService {
 
         return new CompraAgilDetalleResponse("false", null, null, List.of(
                 new CompraAgilError("cache-pendiente",
-                        "Todavía no se sincronizó esta compra ágil. El sistema la sincroniza automáticamente cada 10 minutos -- volvé a intentar en un rato.",
+                        "Todavía no se sincronizó esta compra ágil. El sistema la sincroniza automáticamente cada 10 minutos, inténtelo nuevamente en unos minutos.",
                         null)));
     }
 
