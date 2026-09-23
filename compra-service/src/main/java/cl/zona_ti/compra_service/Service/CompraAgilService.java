@@ -205,13 +205,19 @@ public class CompraAgilService {
     // esto le pegaba en vivo a la API externa como respaldo cuando no
     // encontraba nada cacheado, y ese respaldo era justo la fuente de los
     // timeouts que hacian sentir "lenta" la pagina cuando Mercado Publico
-    // tardaba). Si el codigo todavia no fue sincronizado, se devuelve un
-    // error explicito en vez de colgarse esperando una respuesta externa
-    // -- CompraAgilSyncScheduler (ver sincronizarDetalle arriba) es quien
-    // la va a traer en su proximo ciclo si es una compra real reciente.
+    // tardaba).
+    //
+    // Ya NO exige "detalleCompleto" (se probo exigirlo, se revirtio el
+    // mismo dia -- ver comentario largo en CompraAgilRepository): alcanza
+    // con que la fila exista en cache, tenga o no el detalle 100%
+    // completo -- el resumen del listado ya trae datos reales y usables.
+    // Si el codigo NUNCA se cacheo (ni siquiera el resumen), ahi si se
+    // devuelve el error de abajo -- CompraAgilSyncScheduler (ver
+    // sincronizarDetalle arriba) es quien la va a traer en su proximo
+    // ciclo si es una compra real reciente.
     public CompraAgilDetalleResponse getDetalleByCodigo(String codigo, AuthenticatedPrincipal principal, String authorizationHeader) {
         Optional<CompraAgilEntity> cacheada = compraAgilRepository.findById(codigo);
-        if (cacheada.isPresent() && Boolean.TRUE.equals(cacheada.get().getDetalleCompleto())) {
+        if (cacheada.isPresent()) {
             return new CompraAgilDetalleResponse("true", null, compraAgilMapper.toDetalleDto(cacheada.get()), null);
         }
 
@@ -223,7 +229,7 @@ public class CompraAgilService {
         String codigoReal = buscarCodigoNormalizado(codigo);
         if (codigoReal != null) {
             Optional<CompraAgilEntity> porNormalizado = compraAgilRepository.findById(codigoReal);
-            if (porNormalizado.isPresent() && Boolean.TRUE.equals(porNormalizado.get().getDetalleCompleto())) {
+            if (porNormalizado.isPresent()) {
                 return new CompraAgilDetalleResponse("true", null, compraAgilMapper.toDetalleDto(porNormalizado.get()), null);
             }
         }
