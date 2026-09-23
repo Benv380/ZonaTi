@@ -15,8 +15,16 @@ public interface CompraAgilRepository extends JpaRepository<CompraAgilEntity, St
     // rapida para el usuario, sin pegarle a la API externa -- ver el mismo
     // fix que se hizo para licitaciones). DISTINCT + JOIN FETCH de
     // "documentos" porque toItemDto()/documentosDto() la recorre siempre.
+    // "detalleCompleto = true" (2026-09-23, en las 4 queries de este
+    // archivo): una compra que solo tiene el resumen del listado (sin el
+    // detalle completo sincronizado todavia) NUNCA aparece en ninguna
+    // lista -- decision explicita del usuario: si algo se muestra, tiene
+    // que poder abrirse al instante, sin caer en el mensaje de "todavia no
+    // se sincronizo" (ver CompraAgilService.getDetalleByCodigo). Mejor que
+    // no aparezca un par de minutos a que aparezca y despues no cargue.
     @Query("SELECT DISTINCT c FROM CompraAgilEntity c LEFT JOIN FETCH c.documentos "
-            + "WHERE c.fechaPublicacion >= :desde ORDER BY c.fechaPublicacion DESC")
+            + "WHERE c.fechaPublicacion >= :desde AND c.detalleCompleto = true "
+            + "ORDER BY c.fechaPublicacion DESC")
     List<CompraAgilEntity> findByFechaPublicacionDesde(@Param("desde") LocalDateTime desde);
 
     // Mismo universo (ultimas 48h de publicacion) que findByFechaPublicacionDesde,
@@ -29,7 +37,7 @@ public interface CompraAgilRepository extends JpaRepository<CompraAgilEntity, St
     // Ver boton "En 2do llamado" en CompraRapida.jsx. Ordenadas por cuando
     // cierra el 2do llamado, la mas proxima primero.
     @Query("SELECT DISTINCT c FROM CompraAgilEntity c LEFT JOIN FETCH c.documentos "
-            + "WHERE c.fechaPublicacion >= :desde "
+            + "WHERE c.fechaPublicacion >= :desde AND c.detalleCompleto = true "
             + "AND c.fechaCierreSegundoLlamado IS NOT NULL AND c.fechaCierreSegundoLlamado > :ahora "
             + "AND (c.fechaCierrePrimerLlamado IS NULL OR c.fechaCierrePrimerLlamado <= :ahora) "
             + "ORDER BY c.fechaCierreSegundoLlamado ASC")
@@ -45,9 +53,10 @@ public interface CompraAgilRepository extends JpaRepository<CompraAgilEntity, St
     // tenga mas de 48h, y una busqueda por palabra clave deberia poder
     // encontrarla igual.
     @Query("SELECT DISTINCT c FROM CompraAgilEntity c LEFT JOIN FETCH c.documentos "
-            + "WHERE LOWER(c.nombre) LIKE LOWER(CONCAT('%', :texto, '%')) "
+            + "WHERE (LOWER(c.nombre) LIKE LOWER(CONCAT('%', :texto, '%')) "
             + "OR LOWER(c.descripcion) LIKE LOWER(CONCAT('%', :texto, '%')) "
-            + "OR LOWER(c.organismoComprador) LIKE LOWER(CONCAT('%', :texto, '%')) "
+            + "OR LOWER(c.organismoComprador) LIKE LOWER(CONCAT('%', :texto, '%'))) "
+            + "AND c.detalleCompleto = true "
             + "ORDER BY c.fechaPublicacion DESC")
     List<CompraAgilEntity> buscarPorTexto(@Param("texto") String texto);
 
@@ -63,6 +72,7 @@ public interface CompraAgilRepository extends JpaRepository<CompraAgilEntity, St
             + "WHERE (LOWER(c.nombre) LIKE LOWER(CONCAT('%', :texto, '%')) "
             + "OR LOWER(c.descripcion) LIKE LOWER(CONCAT('%', :texto, '%')) "
             + "OR LOWER(c.organismoComprador) LIKE LOWER(CONCAT('%', :texto, '%'))) "
+            + "AND c.detalleCompleto = true "
             + "AND (:region IS NULL OR c.region = :region) "
             + "ORDER BY c.fechaPublicacion DESC")
     List<CompraAgilEntity> buscarPorTextoYRegion(@Param("texto") String texto, @Param("region") Integer region);
