@@ -6,6 +6,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import cl.zona_ti.auth_service.Dto.ActualizarCotizacionRequest;
+import cl.zona_ti.auth_service.Dto.AsignacionEmpresaResumen;
 import cl.zona_ti.auth_service.Dto.ActualizarDetalleDesarrolloRequest;
 import cl.zona_ti.auth_service.Dto.ActualizarEstadoRequest;
 import cl.zona_ti.auth_service.Dto.AsignacionGlobalResponse;
@@ -42,6 +43,24 @@ public class AsignacionService {
         User usuario = obtenerUsuarioPorUsername(principal.username());
         return asignacionRepository.findByUsuarioIdAndTipo(usuario.getId(), tipo).stream()
                 .map(Asignacion::getCodigoExterno)
+                .toList();
+    }
+
+    // Cruce de datos entre usuarios/admins de una misma empresa (pedido
+    // 2026-09-24): cualquiera puede ver que codigos ya estan tomados por un
+    // compañero, para no duplicar trabajo -- sin restriccion de rol (a
+    // diferencia de listarPorEmpresa, que es solo para GLOBAL/EMPRESA y
+    // trae el detalle completo). Incluye TAMBIEN las propias -- el front ya
+    // sabe cuales son mias via misCodigos()/misAsignacionesDetalle() y las
+    // descarta al cruzar, no hace falta filtrarlas aca. GLOBAL no tiene
+    // empresa (empresaId() null) -- devuelve vacio, no tiene sentido para
+    // ese rol (ya ve el panel de todas las empresas).
+    public List<AsignacionEmpresaResumen> misCodigosEmpresa(AuthenticatedPrincipal principal, TipoAsignacion tipo) {
+        if (principal.empresaId() == null) {
+            return List.of();
+        }
+        return asignacionRepository.findByUsuario_EmpresaIdAndTipo(principal.empresaId(), tipo).stream()
+                .map(a -> new AsignacionEmpresaResumen(a.getCodigoExterno(), a.getUsuario().getUsername()))
                 .toList();
     }
 
@@ -242,6 +261,17 @@ public class AsignacionService {
                 .orElseThrow(() -> new EntityNotFoundException("Asignacion no encontrada: " + asignacionId));
         verificarPermiso(asignacion.getUsuario(), solicitante);
         asignacionRepository.delete(asignacion);
+    }
+
+    // Simetrico a recomendar()/asignarme(): el propio usuario se saca a si
+    // mismo una compra/licitacion, sin necesitar el id de la fila (el front
+    // solo conoce el codigoExterno) ni permiso de admin -- cada quien
+    // siempre puede sacarse lo suyo. Si no tiene esa fila (ya se la sacó
+    // antes, o nunca existió), no hace nada -- no hace falta un error acá.
+    public void eliminarMia(String codigoExterno, TipoAsignacion tipo, AuthenticatedPrincipal principal) {
+        User usuario = obtenerUsuarioPorUsername(principal.username());
+        asignacionRepository.findByUsuarioIdAndCodigoExternoAndTipo(usuario.getId(), codigoExterno, tipo)
+                .ifPresent(asignacionRepository::delete);
     }
 
     private User obtenerUsuario(Long userId) {

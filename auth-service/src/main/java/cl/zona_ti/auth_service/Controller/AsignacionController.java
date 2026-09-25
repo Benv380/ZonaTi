@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 import cl.zona_ti.auth_service.Dto.ActualizarCotizacionRequest;
 import cl.zona_ti.auth_service.Dto.ActualizarDetalleDesarrolloRequest;
 import cl.zona_ti.auth_service.Dto.ActualizarEstadoRequest;
+import cl.zona_ti.auth_service.Dto.AsignacionEmpresaResumen;
 import cl.zona_ti.auth_service.Dto.AsignacionGlobalResponse;
 import cl.zona_ti.auth_service.Dto.AsignacionResponse;
 import cl.zona_ti.auth_service.Dto.CrearAsignacionRequest;
@@ -49,6 +50,20 @@ public class AsignacionController {
             @AuthenticationPrincipal AuthenticatedPrincipal principal
     ) {
         return ResponseEntity.ok(asignacionService.misCodigos(principal, tipo));
+    }
+
+    // Cruce de datos entre usuarios/admins de una misma empresa: cualquier
+    // usuario autenticado puede ver que codigos de compra-agil/licitacion
+    // ya estan tomados por un compañero (y por quien), para no duplicar
+    // trabajo -- sin @PreAuthorize de rol, a diferencia de listarPorEmpresa
+    // (el alcance real -- SOLO mi empresa -- lo resuelve el service con el
+    // empresaId del propio JWT, no hay forma de pedir el de otra empresa).
+    @GetMapping("/auth/me/empresa/asignaciones")
+    public ResponseEntity<List<AsignacionEmpresaResumen>> asignacionesDeMiEmpresa(
+            @RequestParam TipoAsignacion tipo,
+            @AuthenticationPrincipal AuthenticatedPrincipal principal
+    ) {
+        return ResponseEntity.ok(asignacionService.misCodigosEmpresa(principal, tipo));
     }
 
     // Version con el detalle completo (estado, origen, quien la
@@ -86,6 +101,22 @@ public class AsignacionController {
             @AuthenticationPrincipal AuthenticatedPrincipal principal
     ) {
         return ResponseEntity.status(HttpStatus.CREATED).body(asignacionService.recomendar(request, principal));
+    }
+
+    // Simetrico a recomendar() (POST arriba) -- el propio usuario se saca
+    // a si mismo una compra/licitacion desde la ventana de detalle (boton
+    // "Quitarme"), identificandola por codigo en vez de por id (el front
+    // nunca vio el id de la fila). Sin restriccion de rol, mismo motivo
+    // que recomendar(): no hay nada que proteger, cada quien solo puede
+    // tocar lo suyo (el service resuelve la fila a partir del propio JWT).
+    @DeleteMapping("/auth/me/asignaciones")
+    public ResponseEntity<Void> quitarme(
+            @RequestParam String codigoExterno,
+            @RequestParam TipoAsignacion tipo,
+            @AuthenticationPrincipal AuthenticatedPrincipal principal
+    ) {
+        asignacionService.eliminarMia(codigoExterno, tipo, principal);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/auth/usuarios/{userId}/asignaciones")

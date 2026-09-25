@@ -1,6 +1,7 @@
 package cl.zona_ti.auth_service.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
@@ -24,6 +25,11 @@ public interface AsignacionRepository extends JpaRepository<Asignacion, Long> {
     // generico sin explicar de quien es el conflicto.
     boolean existsByUsuarioIdAndCodigoExternoAndTipo(Long usuarioId, String codigoExterno, TipoAsignacion tipo);
 
+    // Usado por AsignacionService.eliminarMia -- ubica la fila propia (sin
+    // pasar por un id) para el boton "Quitarme" (self-unassign, simetrico
+    // a recomendar()/asignarme() que tampoco necesitan un id).
+    Optional<Asignacion> findByUsuarioIdAndCodigoExternoAndTipo(Long usuarioId, String codigoExterno, TipoAsignacion tipo);
+
     // Todas las asignaciones/recomendaciones de TODOS los usuarios de una
     // empresa -- lo usa el panel del ADMIN_EMPRESA/GLOBAL para ver de un
     // vistazo lo que sus usuarios recomendaron, sin tener que entrar
@@ -31,6 +37,14 @@ public interface AsignacionRepository extends JpaRepository<Asignacion, Long> {
     // Asignacion -> usuario -> empresa -> id (Spring Data la resuelve
     // sola a partir del nombre del metodo).
     List<Asignacion> findByUsuario_EmpresaId(Long empresaId);
+
+    // Usado por AsignacionService.misCodigosEmpresa -- cruce de datos entre
+    // usuarios/admins de una misma empresa: cualquiera (no solo admin) puede
+    // ver que codigos ya estan tomados por un compañero, para no duplicar
+    // trabajo. Acotado por tipo (a diferencia de findByUsuario_EmpresaId,
+    // que trae todo mezclado) porque el front lo pide por pantalla
+    // (COMPRA_AGIL o LICITACION), no las dos juntas.
+    List<Asignacion> findByUsuario_EmpresaIdAndTipo(Long empresaId, TipoAsignacion tipo);
 
     // El panel GLOBAL de "todo el sistema" (ver AsignacionService.listarTodas)
     // usa findAll(), ya heredado de JpaRepository -- no hace falta un metodo
