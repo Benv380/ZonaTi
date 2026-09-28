@@ -1,0 +1,10 @@
+# Dependencias del script de token de reclamos (obtener_token_reclamos.py).
+#
+# Instalar con:
+#   pip install -r requirements.txt
+#   playwright install chromium
+#
+# El "playwright install chromium" descarga el binario del navegador; no lo
+# instala pip solo, por eso es un paso aparte.
+
+playwright

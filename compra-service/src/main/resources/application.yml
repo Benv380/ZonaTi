@@ -47,6 +47,25 @@ compra-service:
   sync:
     # Cada cuanto corre CompraAgilSyncScheduler (formato ISO-8601 Duration).
     fixed-delay: PT10M
+  python:
+    # Comando que lanza scripts/obtener_token_reclamos.py (Playwright),
+    # separado por comas -- cada elemento es un argv, en orden, ANTES del
+    # script. Default (dev en Windows con escritorio real): "python". Para
+    # una VM Linux sin escritorio, ver application-linux.yml (antepone
+    # xvfb-run).
+    command-prefix: python
+    reclamos-script-path: scripts/obtener_token_reclamos.py
+    timeout-seconds: 90
+  reclamos:
+    # Cada cuanto se corre obtener_token_reclamos.py para renovar el token
+    # de comprador-api-pro.mercadopublico.cl (ver ReclamosTokenScheduler) --
+    # tiene que ser MENOR a token-vida-horas de abajo para renovarlo antes
+    # de que venza.
+    token-refresh-delay: PT6H
+    # Vencimiento real observado a mano: ~8hs. Se cachea con margen (7hs)
+    # para no quedar sirviendo un token ya vencido entre un ciclo del
+    # scheduler y el siguiente (ver ReclamosTokenCacheService).
+    token-vida-horas: 7
 
 jwt:
   # TIENE que ser exactamente el mismo secreto que usa auth-service (ver su
@@ -77,6 +96,29 @@ mercado-publico:
     user-key: 41186b85826e80d1a0d445a6ce67d1a3
   auth:
     url: https://servicios-prd.mercadopublico.cl
+  comprador:
+    # API interna (no documentada/no oficial) de la ficha publica de
+    # comprador de Mercado Publico -- unico lugar donde encontramos datos
+    # reales de reclamos por organismo (agregado por tipo, ver
+    # PerfilCompradorResponse). Exige un JWT anonimo (rol "publico", no una
+    # cuenta personal) que expira cada ~8hs -- ese servidor de auth es
+    # DISTINTO al de mercado-publico.auth de arriba (el JWT de uno no sirve
+    # para el otro), asi que no se puede renovar con el mismo mecanismo
+    # liviano (TokenCacheService/AuthClient). Se renueva solo con un
+    # scraper Playwright (ver ReclamosTokenScheduler/ReclamosTokenCacheService/
+    # scripts/obtener_token_reclamos.py) que replica lo que ya hace la
+    # propia pagina publica de la ficha de un comprador al cargar -- no
+    # hace falta login con cuenta real.
+    #
+    # Si el scheduler todavia no corrio (recien arrancó el servicio) o el
+    # scraper falla, ReclamosClient.estaDisponible() da false y no se
+    # llama nada (fail closed, ver CompraAgilService.reclamosDe) -- el
+    # resto del panel sigue funcionando.
+    url: https://comprador-api-pro.mercadopublico.cl/comprador
+    # RUT de cualquier organismo publico -- solo se usa para cargar la
+    # ficha y que la pagina misma pida su token (no hace falta que tenga
+    # reclamos). Sin este valor, ReclamosTokenScheduler no renueva nada.
+    rut-referencia: ${MERCADO_PUBLICO_RUT_REFERENCIA:}
 logging:
   level:
     cl.zona_ti.compra_service.Scheduler: DEBUG

@@ -14,6 +14,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilDetalleResponse;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilListadoResponse;
+import cl.zona_ti.compra_service.Dto.PerfilCompradorResponse;
+import cl.zona_ti.compra_service.Dto.PerfilVendedorResponse;
 import cl.zona_ti.compra_service.Security.AuthenticatedPrincipal;
 import cl.zona_ti.compra_service.Service.CompraAgilService;
 
@@ -112,6 +114,24 @@ public class CompraAgilController {
             @RequestParam(defaultValue = "15") int tamano
     ) {
         return ResponseEntity.ok(compraAgilService.buscarPorPerfil(principal, authorization, pagina, tamano));
+    }
+
+    // Panel "perfil del comprador" que se abre al lado del detalle de una
+    // compra (ver CompraRapida.jsx) -- 100% del cache local, no pega en
+    // vivo a Mercado Publico (mismo criterio cache-only del resto del
+    // panel). "rut" es el rut_institucion del organismo, no el codigo de
+    // la compra.
+    @GetMapping("/organismo/perfil")
+    public ResponseEntity<PerfilCompradorResponse> perfilComprador(@RequestParam String rut) {
+        return ResponseEntity.ok(compraAgilService.perfilComprador(rut));
+    }
+
+    // Panel "Perfil del ganador" en CompraAgilResueltas.jsx (Home.jsx) --
+    // 100% del cache local, no pega en vivo a Mercado Publico. "rut" es el
+    // rut_proveedor de la cotizacion ganadora.
+    @GetMapping("/proveedor/perfil")
+    public ResponseEntity<PerfilVendedorResponse> perfilVendedor(@RequestParam String rut) {
+        return ResponseEntity.ok(compraAgilService.perfilVendedor(rut));
     }
 
 }

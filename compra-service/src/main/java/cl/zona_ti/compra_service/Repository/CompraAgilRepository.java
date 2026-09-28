@@ -78,4 +78,12 @@ public interface CompraAgilRepository extends JpaRepository<CompraAgilEntity, St
             + "AND (:region IS NULL OR c.region = :region) "
             + "ORDER BY c.fechaPublicacion DESC")
     List<CompraAgilEntity> buscarPorTextoYRegion(@Param("texto") String texto, @Param("region") Integer region);
+
+    // Panel "perfil del comprador" (ver CompraAgilService.perfilComprador):
+    // TODO lo cacheado de un mismo organismo, sin filtro de fecha -- a
+    // diferencia de las de arriba, este panel es historico a proposito (que
+    // tan seguido compra, cuantas demandas acumula), no "lo reciente". Sin
+    // JOIN FETCH de documentos -- el perfil no los necesita, evita traer
+    // datos de mas.
+    List<CompraAgilEntity> findByRutInstitucion(String rutInstitucion);
 }

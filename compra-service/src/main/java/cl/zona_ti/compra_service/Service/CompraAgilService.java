@@ -1,5 +1,6 @@
 package cl.zona_ti.compra_service.Service;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -16,6 +17,7 @@ import java.util.List;
 
 import cl.zona_ti.compra_service.Client.CompraAgilClient;
 import cl.zona_ti.compra_service.Client.PerfilClient;
+import cl.zona_ti.compra_service.Client.ReclamosClient;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilDetalleResponse;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilError;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilListadoResponse;
@@ -24,30 +26,46 @@ import cl.zona_ti.compra_service.Dto.CompraAgilDto.Item;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.Listado;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.Paginacion;
 import cl.zona_ti.compra_service.Dto.PerfilBusquedaDto;
+import cl.zona_ti.compra_service.Dto.PerfilCompradorResponse;
+import cl.zona_ti.compra_service.Dto.PerfilCompradorResponse.ConteoMensual;
+import cl.zona_ti.compra_service.Dto.PerfilCompradorResponse.ConteoTexto;
+import cl.zona_ti.compra_service.Dto.PerfilCompradorResponse.ReclamoPorTipo;
+import cl.zona_ti.compra_service.Dto.PerfilCompradorResponse.ReclamosResumen;
+import cl.zona_ti.compra_service.Dto.PerfilVendedorResponse;
+import cl.zona_ti.compra_service.Dto.ReclamosDto.CalculosReclamosResponse;
 import cl.zona_ti.compra_service.Mapper.CompraAgilMapper;
 import cl.zona_ti.compra_service.Model.Alcance;
 import cl.zona_ti.compra_service.Model.CompraAgilEntity;
+import cl.zona_ti.compra_service.Model.CompraAgilProveedorCotizandoEntity;
+import cl.zona_ti.compra_service.Repository.CompraAgilProveedorCotizandoRepository;
 import cl.zona_ti.compra_service.Repository.CompraAgilRepository;
 import cl.zona_ti.compra_service.Security.AuthenticatedPrincipal;
 
 @Service
 public class CompraAgilService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CompraAgilService.class);
+
     private final CompraAgilClient compraAgilClient;
     private final CompraAgilRepository compraAgilRepository;
+    private final CompraAgilProveedorCotizandoRepository compraAgilProveedorCotizandoRepository;
     private final CompraAgilMapper compraAgilMapper;
     private final PerfilClient perfilClient;
+    private final ReclamosClient reclamosClient;
 
     // Tamaño de pagina por defecto para /listar -- ver
     // listarUltimasOchoHorasCacheado().
     private static final int TAMANO_PAGINA_DEFECTO = 15;
 
     public CompraAgilService(CompraAgilClient compraAgilClient, CompraAgilRepository compraAgilRepository,
-            CompraAgilMapper compraAgilMapper, PerfilClient perfilClient) {
+            CompraAgilProveedorCotizandoRepository compraAgilProveedorCotizandoRepository,
+            CompraAgilMapper compraAgilMapper, PerfilClient perfilClient, ReclamosClient reclamosClient) {
         this.compraAgilClient = compraAgilClient;
         this.compraAgilRepository = compraAgilRepository;
+        this.compraAgilProveedorCotizandoRepository = compraAgilProveedorCotizandoRepository;
         this.compraAgilMapper = compraAgilMapper;
         this.perfilClient = perfilClient;
+        this.reclamosClient = reclamosClient;
     }
 
     // Interno/de confianza -- los "filtros" ya vienen resueltos (por el
@@ -137,6 +155,173 @@ public class CompraAgilService {
                 .sorted(Comparator.comparing(CompraAgilEntity::getFechaPublicacion, Comparator.nullsLast(Comparator.reverseOrder())))
                 .toList();
         return paginarCacheado(ordenadas, pagina, tamano);
+    }
+
+    // Panel "perfil del comprador" (pedido 2026-09-25): agrega, del lado
+    // nuestro, todo lo que ya esta cacheado de un mismo organismo -- no es
+    // data que Mercado Publico entregue ya armada. Se identifica por RUT
+    // (no por nombre -- el nombre del organismo puede venir con variaciones
+    // de mayusculas/espacios entre una compra y otra, el RUT es estable).
+    // "demandas"/"multa_sancion" son lo mas cercano a "reclamos" que hay
+    // confirmado y ya cacheado por compra (ver Resumen en CompraAgilDto) --
+    // Mercado Publico no expone reclamos categorizados por tipo en esta
+    // API, asi que no se puede desglosar mas que eso por ahora.
+    public PerfilCompradorResponse perfilComprador(String rutInstitucion) {
+        List<CompraAgilEntity> compras = compraAgilRepository.findByRutInstitucion(rutInstitucion);
+
+        String organismo = compras.stream()
+                .map(CompraAgilEntity::getOrganismoComprador)
+                .filter(nombre -> nombre != null && !nombre.isBlank())
+                .findFirst()
+                .orElse(null);
+
+        BigDecimal montoTotal = compras.stream()
+                .map(CompraAgilService::montoRelevante)
+                .filter(monto -> monto != null)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal montoPromedio = compras.isEmpty()
+                ? BigDecimal.ZERO
+                : montoTotal.divide(BigDecimal.valueOf(compras.size()), 0, java.math.RoundingMode.HALF_UP);
+
+        long comprasConDemandas = compras.stream()
+                .filter(c -> c.getTotalDemandas() != null && c.getTotalDemandas() > 0)
+                .count();
+        long totalDemandas = compras.stream()
+                .mapToLong(c -> c.getTotalDemandas() != null ? c.getTotalDemandas() : 0)
+                .sum();
+        long comprasConMultaSancion = compras.stream()
+                .filter(c -> c.getMultaSancion() != null && c.getMultaSancion().signum() > 0)
+                .count();
+        BigDecimal multaSancionTotal = compras.stream()
+                .map(CompraAgilEntity::getMultaSancion)
+                .filter(monto -> monto != null)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        List<ConteoMensual> comprasPorMes = compras.stream()
+                .filter(c -> c.getFechaPublicacion() != null)
+                .collect(java.util.stream.Collectors.groupingBy(
+                        c -> c.getFechaPublicacion().toLocalDate().withDayOfMonth(1).toString(),
+                        java.util.TreeMap::new,
+                        java.util.stream.Collectors.counting()))
+                .entrySet().stream()
+                .map(entrada -> new ConteoMensual(entrada.getKey(), entrada.getValue()))
+                .toList();
+
+        List<ConteoTexto> convocatoriasFrecuentes = compras.stream()
+                .map(CompraAgilEntity::getConvocatoriaDescripcion)
+                .filter(texto -> texto != null && !texto.isBlank())
+                .collect(java.util.stream.Collectors.groupingBy(texto -> texto, java.util.stream.Collectors.counting()))
+                .entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(5)
+                .map(entrada -> new ConteoTexto(entrada.getKey(), entrada.getValue()))
+                .toList();
+
+        return new PerfilCompradorResponse(
+                rutInstitucion,
+                organismo,
+                compras.size(),
+                montoTotal,
+                montoPromedio,
+                comprasConDemandas,
+                totalDemandas,
+                comprasConMultaSancion,
+                multaSancionTotal,
+                comprasPorMes,
+                convocatoriasFrecuentes,
+                reclamosDe(rutInstitucion));
+    }
+
+    // Reclamos reales de ChileCompra (ver ReclamosClient) -- fail closed a
+    // proposito: null si el token no esta configurado/vencido o la llamada
+    // falla por cualquier motivo (API no oficial, puede cambiar sin aviso).
+    // El resto del panel no depende de esto.
+    private ReclamosResumen reclamosDe(String rutInstitucion) {
+        if (!reclamosClient.estaDisponible()) {
+            return null;
+        }
+        try {
+            CalculosReclamosResponse respuesta = reclamosClient.calculosReclamos(rutInstitucion);
+            if (respuesta == null || !"OK".equals(respuesta.success()) || respuesta.payload() == null) {
+                log.warn("Reclamos: respuesta no OK para rut {} -- revisar si el token vencio.", rutInstitucion);
+                return null;
+            }
+            List<ReclamoPorTipo> porTipo = respuesta.payload().data() == null
+                    ? List.of()
+                    : respuesta.payload().data().stream()
+                            .map(item -> new ReclamoPorTipo(
+                                    item.nombre(),
+                                    item.cantidadReclamos() != null ? item.cantidadReclamos() : 0,
+                                    item.porcentajeReclamo() != null ? item.porcentajeReclamo() : 0))
+                            .toList();
+            int total = respuesta.payload().totalReclamos() != null ? respuesta.payload().totalReclamos() : 0;
+            return new ReclamosResumen(total, porTipo);
+        } catch (Exception e) {
+            log.warn("Reclamos: no se pudo consultar para rut {}: {}", rutInstitucion, e.getMessage());
+            return null;
+        }
+    }
+
+    // Panel "Perfil del ganador" (pedido 2026-09-25, Home.jsx -- "Compras
+    // Ágiles listas"): agrega todas las cotizaciones de un mismo proveedor
+    // (por RUT) a lo largo de las compras agiles ya cacheadas CON DETALLE
+    // COMPLETO. "proveedor_seleccionado == 1" es el mismo criterio que ya
+    // usa ganadorDe() en CompraAgilResueltas.jsx del front.
+    public PerfilVendedorResponse perfilVendedor(String rutProveedor) {
+        List<CompraAgilProveedorCotizandoEntity> cotizaciones = compraAgilProveedorCotizandoRepository
+                .findByRutProveedor(rutProveedor);
+
+        String razonSocial = cotizaciones.stream()
+                .map(CompraAgilProveedorCotizandoEntity::getRazonSocial)
+                .filter(nombre -> nombre != null && !nombre.isBlank())
+                .findFirst()
+                .orElse(null);
+
+        List<CompraAgilProveedorCotizandoEntity> ganadas = cotizaciones.stream()
+                .filter(c -> c.getProveedorSeleccionado() != null && c.getProveedorSeleccionado() == 1)
+                .toList();
+
+        double tasaAdjudicacion = cotizaciones.isEmpty()
+                ? 0
+                : (ganadas.size() * 100.0) / cotizaciones.size();
+
+        BigDecimal montoTotalGanado = ganadas.stream()
+                .map(CompraAgilProveedorCotizandoEntity::getMontoTotal)
+                .filter(monto -> monto != null)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal montoPromedioGanado = ganadas.isEmpty()
+                ? BigDecimal.ZERO
+                : montoTotalGanado.divide(BigDecimal.valueOf(ganadas.size()), 0, java.math.RoundingMode.HALF_UP);
+
+        List<PerfilVendedorResponse.ConteoTexto> organismosFrecuentes = cotizaciones.stream()
+                .map(c -> c.getCompraAgil() != null ? c.getCompraAgil().getOrganismoComprador() : null)
+                .filter(texto -> texto != null && !texto.isBlank())
+                .collect(java.util.stream.Collectors.groupingBy(texto -> texto, java.util.stream.Collectors.counting()))
+                .entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(5)
+                .map(entrada -> new PerfilVendedorResponse.ConteoTexto(entrada.getKey(), entrada.getValue()))
+                .toList();
+
+        return new PerfilVendedorResponse(
+                rutProveedor,
+                razonSocial,
+                cotizaciones.size(),
+                ganadas.size(),
+                tasaAdjudicacion,
+                montoPromedioGanado,
+                montoTotalGanado,
+                organismosFrecuentes);
+    }
+
+    // CLP cuando esta disponible (el dato mas directamente comparable entre
+    // compras); si no, el monto tal cual venga -- mismo criterio de fallback
+    // que ya usa CompraCard.jsx en el front (ver formatearMonto alli).
+    private static BigDecimal montoRelevante(CompraAgilEntity compra) {
+        if (compra.getMontoDisponibleClp() != null) {
+            return compra.getMontoDisponibleClp();
+        }
+        return compra.getMontoDisponible();
     }
 
     private Integer parseRegion(String regionCodigo) {
