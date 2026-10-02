@@ -477,12 +477,25 @@ public class CompraAgilService {
                 ahora.minusDays(DIAS_ATRAS_RESYNC), ahora.plusHours(HORAS_ADELANTE_RESYNC));
     }
 
-    // Uso EXCLUSIVO del panel de monitoreo (ver SyncController.salud()) --
-    // simple pass-through, solo para no exponer CompraAgilClient directo
-    // al controller (misma capa que el resto de los metodos de este
-    // service).
+    // Uso EXCLUSIVO del panel de monitoreo (ver SyncController.salud()).
+    // Bug real detectado 2026-10-02: esto antes pegaba EN VIVO a Mercado
+    // Publico en cada request, y el panel se auto-refresca cada 15s --
+    // solo esa pestaña abierta generaba ~5700 llamados/dia contra el
+    // ticket, sumado a toda la sincronizacion normal, y saturo la cuota
+    // diaria de la API. Ahora es un cache: un scheduler aparte (abajo)
+    // refresca esto cada varios minutos en vez de en cada visita al
+    // panel -- pingVivo() queda instantaneo, sin pegarle a nada externo.
+    private volatile CompraAgilClient.EstadoApiEnVivo ultimoPingVivo;
+
+    @org.springframework.scheduling.annotation.Scheduled(
+            initialDelay = 0,
+            fixedDelayString = "${compra-service.monitoreo.ping-delay:PT5M}")
+    public void refrescarPingVivo() {
+        ultimoPingVivo = compraAgilClient.pingVivo();
+    }
+
     public CompraAgilClient.EstadoApiEnVivo pingVivo() {
-        return compraAgilClient.pingVivo();
+        return ultimoPingVivo;
     }
 
     // Version rapida para servir al usuario: lee directo de lo que
