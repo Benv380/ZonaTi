@@ -1,7 +1,10 @@
 package cl.zona_ti.licitacion_service.Scheduler;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -50,6 +53,16 @@ public class LicitacionSyncScheduler {
 
     public static final String JOB_ADJUNTOS = "licitacion-adjuntos";
 
+    // Mismo criterio que CompraAgilSyncScheduler (pedido explicito
+    // 2026-10-02, paridad con Api-Prueba): tope de 2 intentos por codigo
+    // antes de dejar de reintentar, y sincronizacion mas espaciada en
+    // horario nocturno.
+    private static final int MAX_INTENTOS_FALLO = 2;
+    private static final int HORA_FIN_NOCTURNO = 7;
+    private static final long MINUTOS_CICLO_NOCTURNO = 120;
+    private final Map<String, Integer> fallosAdjuntos = new ConcurrentHashMap<>();
+    private volatile LocalDateTime ultimaEjecucion;
+
     private final LicitacionAttachmentScraperClient scraper;
     private final AdjuntoLicitacionRepository repository;
     private final LicitacionService licitacionService;
@@ -66,8 +79,16 @@ public class LicitacionSyncScheduler {
         this.syncHealthService = syncHealthService;
     }
 
-    @Scheduled(fixedDelayString = "${licitacion-service.sync.fixed-delay:PT10M}")
+    @Scheduled(fixedDelayString = "${licitacion-service.sync.fixed-delay:PT20M}")
     public void sincronizarAdjuntos() {
+        LocalDateTime ahora = LocalDateTime.now();
+        if (ahora.getHour() < HORA_FIN_NOCTURNO
+                && ultimaEjecucion != null
+                && Duration.between(ultimaEjecucion, ahora).toMinutes() < MINUTOS_CICLO_NOCTURNO) {
+            return;
+        }
+        ultimaEjecucion = ahora;
+
         List<String> codigosDelPeriodo = obtenerCodigosLicitacionesRecientes();
         syncHealthService.iniciarCiclo(JOB_ADJUNTOS);
         if (codigosDelPeriodo.isEmpty()) {
@@ -77,6 +98,7 @@ public class LicitacionSyncScheduler {
 
         List<String> pendientes = codigosDelPeriodo.stream()
                 .filter(this::necesitaSincronizar)
+                .filter(codigo -> fallosAdjuntos.getOrDefault(codigo, 0) < MAX_INTENTOS_FALLO)
                 .toList();
 
         if (pendientes.isEmpty()) {
@@ -117,12 +139,15 @@ public class LicitacionSyncScheduler {
             repository.saveAll(nuevos);
             log.info("Sync adjuntos OK para {}: {} archivo(s).", codigo, nuevos.size());
             syncHealthService.registrarExito(JOB_ADJUNTOS);
+            fallosAdjuntos.remove(codigo);
 
         } catch (Exception e) {
             // No relanzar: un fallo en una licitación no debe tumbar el pool ni
-            // afectar a las demás que se están procesando en paralelo. Reintentará
-            // solo en el próximo ciclo (sigue "pendiente" porque no quedó guardada).
-            log.warn("Sync adjuntos FALLÓ para {}: {}", codigo, e.getMessage());
+            // afectar a las demás que se están procesando en paralelo. Reintenta
+            // en el próximo ciclo hasta agotar MAX_INTENTOS_FALLO (sigue
+            // "pendiente" porque no quedó guardada).
+            int intentos = fallosAdjuntos.merge(codigo, 1, Integer::sum);
+            log.warn("Sync adjuntos FALLÓ para {} ({}/{}): {}", codigo, intentos, MAX_INTENTOS_FALLO, e.getMessage());
             syncHealthService.registrarError(JOB_ADJUNTOS, e.getMessage());
         }
     }

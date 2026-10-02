@@ -1,8 +1,12 @@
 package cl.zona_ti.compra_service.Scheduler;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -47,6 +51,22 @@ public class CompraAgilSyncScheduler {
     public static final String JOB_DETALLE = "compra-agil-detalle";
     public static final String JOB_ADJUNTOS = "compra-agil-adjuntos";
 
+    // Pedido explicito 2026-10-02 (paridad con Api-Prueba): si un codigo
+    // falla 2 veces seguidas, se deja de reintentar -- evita que un
+    // bloqueo/caida prolongada de Mercado Publico (ej. el 403 del ticket)
+    // haga que los MISMOS codigos se reintenten completos en cada ciclo
+    // durante los 3 dias que dura la ventana de codigosProximosACerrar.
+    private static final int MAX_INTENTOS_FALLO = 2;
+    private final Map<String, Integer> fallosDetalle = new ConcurrentHashMap<>();
+    private final Map<String, Integer> fallosAdjuntos = new ConcurrentHashMap<>();
+
+    // Horario nocturno (00:00-06:59): sincronizacion espaciada a cada 2h en
+    // vez de cada compra-service.sync.fixed-delay -- menos presion sobre la
+    // API externa cuando casi nadie la necesita al instante.
+    private static final int HORA_FIN_NOCTURNO = 7;
+    private static final long MINUTOS_CICLO_NOCTURNO = 120;
+    private volatile LocalDateTime ultimaEjecucion;
+
     private final CompraAgilService compraAgilService;
     private final AdjuntoService adjuntoService;
     private final SyncHealthService syncHealthService;
@@ -59,8 +79,16 @@ public class CompraAgilSyncScheduler {
         this.syncHealthService = syncHealthService;
     }
 
-    @Scheduled(fixedDelayString = "${compra-service.sync.fixed-delay:PT10M}")
+    @Scheduled(fixedDelayString = "${compra-service.sync.fixed-delay:PT20M}")
     public void sincronizar() {
+        LocalDateTime ahora = LocalDateTime.now();
+        if (ahora.getHour() < HORA_FIN_NOCTURNO
+                && ultimaEjecucion != null
+                && Duration.between(ultimaEjecucion, ahora).toMinutes() < MINUTOS_CICLO_NOCTURNO) {
+            return;
+        }
+        ultimaEjecucion = ahora;
+
         List<String> codigos = obtenerCodigosRecientes();
         syncHealthService.iniciarCiclo(JOB_DETALLE);
         syncHealthService.iniciarCiclo(JOB_ADJUNTOS);
@@ -76,19 +104,29 @@ public class CompraAgilSyncScheduler {
     }
 
     private void sincronizarUno(String codigo) {
-        try {
-            compraAgilService.sincronizarDetalle(codigo);
-            syncHealthService.registrarExito(JOB_DETALLE);
-        } catch (Exception e) {
-            log.warn("Sync compra agil: detalle de {} FALLÓ: {}", codigo, e.getMessage());
-            syncHealthService.registrarError(JOB_DETALLE, e.getMessage());
+        if (fallosDetalle.getOrDefault(codigo, 0) < MAX_INTENTOS_FALLO) {
+            try {
+                compraAgilService.sincronizarDetalle(codigo);
+                syncHealthService.registrarExito(JOB_DETALLE);
+                fallosDetalle.remove(codigo);
+            } catch (Exception e) {
+                int intentos = fallosDetalle.merge(codigo, 1, Integer::sum);
+                log.warn("Sync compra agil: detalle de {} FALLÓ ({}/{}): {}",
+                        codigo, intentos, MAX_INTENTOS_FALLO, e.getMessage());
+                syncHealthService.registrarError(JOB_DETALLE, e.getMessage());
+            }
         }
-        try {
-            adjuntoService.sincronizarBinarios(codigo);
-            syncHealthService.registrarExito(JOB_ADJUNTOS);
-        } catch (Exception e) {
-            log.warn("Sync compra agil: adjuntos de {} FALLARON: {}", codigo, e.getMessage());
-            syncHealthService.registrarError(JOB_ADJUNTOS, e.getMessage());
+        if (fallosAdjuntos.getOrDefault(codigo, 0) < MAX_INTENTOS_FALLO) {
+            try {
+                adjuntoService.sincronizarBinarios(codigo);
+                syncHealthService.registrarExito(JOB_ADJUNTOS);
+                fallosAdjuntos.remove(codigo);
+            } catch (Exception e) {
+                int intentos = fallosAdjuntos.merge(codigo, 1, Integer::sum);
+                log.warn("Sync compra agil: adjuntos de {} FALLARON ({}/{}): {}",
+                        codigo, intentos, MAX_INTENTOS_FALLO, e.getMessage());
+                syncHealthService.registrarError(JOB_ADJUNTOS, e.getMessage());
+            }
         }
     }
 

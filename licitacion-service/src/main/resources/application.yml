@@ -47,8 +47,11 @@ licitacion-service:
   # cache.ttl-minutos, asi que los ciclos siguientes son livianos).
   dias-listado: 15
   sync:
-    # Cada cuanto corre LicitacionSyncScheduler (formato ISO-8601 Duration).
-    fixed-delay: PT10M
+    # Cada cuanto corre LicitacionSyncScheduler en horario diurno (formato
+    # ISO-8601 Duration). En horario nocturno (00:00-06:59) se espacia
+    # solo a cada 2h, sin tocar esta propiedad -- ver
+    # MINUTOS_CICLO_NOCTURNO en LicitacionSyncScheduler.
+    fixed-delay: PT20M
 
 jwt:
   # TIENE que ser exactamente el mismo secreto que usa auth-service (ver su

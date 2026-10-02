@@ -38,15 +38,18 @@ compra-service:
     # Minutos que se considera "fresca" una fila cacheada (compras agiles,
     # adjuntos de compra agil) antes de volver a pedirla a Mercado Publico.
     # Tiene que ser MAYOR al intervalo de CompraAgilSyncScheduler
-    # (compra-service.sync.fixed-delay, 10 min por defecto) -- con 10
-    # (igual al intervalo) el detalle quedaba "vencido" justo antes de
+    # (compra-service.sync.fixed-delay, 20 min por defecto) -- con el TTL
+    # igual al intervalo el detalle quedaba "vencido" justo antes de
     # cada ciclo, asi que abrir el detalle desde "Mostrar todo" terminaba
     # pegandole en vivo a Mercado Publico (hasta 20s de espera) en vez de
     # servir el cache que todavia era valido.
-    ttl-minutos: 20
+    ttl-minutos: 25
   sync:
-    # Cada cuanto corre CompraAgilSyncScheduler (formato ISO-8601 Duration).
-    fixed-delay: PT10M
+    # Cada cuanto corre CompraAgilSyncScheduler en horario diurno (formato
+    # ISO-8601 Duration). En horario nocturno (00:00-06:59) se espacia
+    # solo a cada 2h, sin tocar esta propiedad -- ver
+    # MINUTOS_CICLO_NOCTURNO en CompraAgilSyncScheduler.
+    fixed-delay: PT20M
   python:
     # Comando que lanza scripts/obtener_token_reclamos.py (Playwright),
     # separado por comas -- cada elemento es un argv, en orden, ANTES del
