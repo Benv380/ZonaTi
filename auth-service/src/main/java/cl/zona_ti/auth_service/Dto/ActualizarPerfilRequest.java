@@ -16,7 +16,10 @@ public class ActualizarPerfilRequest {
     @NotBlank(message = "Las palabras clave son obligatorias")
     private String palabrasClave;
 
-    @NotBlank(message = "El código de región es obligatorio")
+    // Sin @NotBlank (pedido explicito 2026-10-02, paridad con Api-Prueba):
+    // vacio significa "todo el pais, sin restriccion de region" -- ver
+    // CompraAgilService.parseRegion y el select "Todo el país (sin
+    // restricción)" en MiEmpresa.jsx.
     private String regionCodigo;
 
     private String regionNombre;

@@ -67,6 +67,33 @@ public class CompraAgilSyncScheduler {
     private static final long MINUTOS_CICLO_NOCTURNO = 120;
     private volatile LocalDateTime ultimaEjecucion;
 
+    // Pedido explicito 2026-10-02 (paridad con Api-Prueba): adjunto.
+    // mercadopublico.cl (API de adjuntos, distinta de la de compra-agil/
+    // listado) daba 429 en ~50 de 2000 llamados -- los 4 hilos del pool
+    // podian pegarle casi al mismo tiempo. Este espaciador global (no por
+    // hilo) obliga a que haya al menos ESPACIADO_ADJUNTOS_MS entre un
+    // llamado de adjuntos y el siguiente, sin importar que hilo lo dispare.
+    private static final long ESPACIADO_ADJUNTOS_MS = 400;
+    private final Object candadoAdjuntos = new Object();
+    private long proximoTurnoAdjuntos = 0;
+
+    private void esperarTurnoAdjuntos() {
+        long espera;
+        synchronized (candadoAdjuntos) {
+            long ahora = System.currentTimeMillis();
+            long inicio = Math.max(ahora, proximoTurnoAdjuntos);
+            espera = inicio - ahora;
+            proximoTurnoAdjuntos = inicio + ESPACIADO_ADJUNTOS_MS;
+        }
+        if (espera > 0) {
+            try {
+                Thread.sleep(espera);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
     private final CompraAgilService compraAgilService;
     private final AdjuntoService adjuntoService;
     private final SyncHealthService syncHealthService;
@@ -117,6 +144,7 @@ public class CompraAgilSyncScheduler {
             }
         }
         if (fallosAdjuntos.getOrDefault(codigo, 0) < MAX_INTENTOS_FALLO) {
+            esperarTurnoAdjuntos();
             try {
                 adjuntoService.sincronizarBinarios(codigo);
                 syncHealthService.registrarExito(JOB_ADJUNTOS);
