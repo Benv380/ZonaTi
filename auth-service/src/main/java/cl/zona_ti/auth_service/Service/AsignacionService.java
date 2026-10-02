@@ -2,6 +2,9 @@ package cl.zona_ti.auth_service.Service;
 
 import java.util.List;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
@@ -153,10 +156,76 @@ public class AsignacionService {
     // diferencia de listarPorEmpresa, incluye empresaId/empresaNombre en
     // cada fila (ver AsignacionGlobalResponse) -- sin eso no se podria
     // filtrar client-side por empresa en una tabla que mezcla varias.
-    public List<AsignacionGlobalResponse> listarTodas() {
-        return asignacionRepository.findAll().stream()
+    //
+    // Paginado server-side (2026-09-30) -- antes cargaba TODA la tabla de
+    // una (findAll() sin limite), que crece para siempre porque nada se
+    // borra nunca (ni COMPLETADO/DESCARTADO). Filtros tambien server-side
+    // (ver AsignacionRepository.buscarPaginado), ya no client-side sobre
+    // una lista completa en memoria.
+    public record AsignacionGlobalPaginada(
+            List<AsignacionGlobalResponse> items,
+            int totalPaginas,
+            int paginaActual,
+            int tamanoPagina,
+            long totalResultados) {
+    }
+
+    private static final int TAMANO_PAGINA_DEFECTO = 20;
+
+    public AsignacionGlobalPaginada listarTodasPaginado(Long empresaId, Long usuarioId, TipoAsignacion tipo,
+            EstadoAsignacion estado, int pagina, int tamano) {
+        int tam = tamano > 0 ? tamano : TAMANO_PAGINA_DEFECTO;
+        Pageable pageable = PageRequest.of(Math.max(pagina - 1, 0), tam);
+        Page<Asignacion> resultado = asignacionRepository.buscarPaginado(empresaId, usuarioId, tipo, estado, pageable);
+        List<AsignacionGlobalResponse> items = resultado.getContent().stream()
                 .map(this::toResponseGlobal)
                 .toList();
+        return new AsignacionGlobalPaginada(items, resultado.getTotalPages(), pagina, tam, resultado.getTotalElements());
+    }
+
+    // Estados que cuentan como "trabajo en curso" -- mismo criterio que
+    // ACTIVOS en Home.jsx (front) y ASIGNACION_ACTIVA en MiEmpresa.jsx.
+    private static final List<EstadoAsignacion> ESTADOS_ACTIVOS =
+            List.of(EstadoAsignacion.ASIGNADO, EstadoAsignacion.ANALISIS, EstadoAsignacion.DESARROLLO);
+
+    // StatCards de Home.jsx para un usuario GLOBAL ("Licitaciones activas"/
+    // "Compras Ágiles activas", TODAS las empresas juntas) -- antes salia
+    // de contar sobre la lista completa que devolvia el viejo /auth/
+    // asignaciones sin paginar; con el endpoint ya paginado (ver
+    // listarTodasPaginado) hacia falta este resumen aparte, liviano (2
+    // COUNT, no carga filas).
+    public record ResumenGlobal(long licitacionesActivas, long comprasActivas) {
+    }
+
+    public ResumenGlobal resumenGlobal() {
+        long licitaciones = asignacionRepository.countByEstadoInAndTipo(ESTADOS_ACTIVOS, TipoAsignacion.LICITACION);
+        long compras = asignacionRepository.countByEstadoInAndTipo(ESTADOS_ACTIVOS, TipoAsignacion.COMPRA_AGIL);
+        return new ResumenGlobal(licitaciones, compras);
+    }
+
+    // Panel GLOBAL "Pendientes de revision" -- separado de
+    // listarTodasPaginado a proposito (ver AsignacionRepository.
+    // findByPendienteRevisionTrue), asi ninguna combinacion de filtros/
+    // pagina puede esconder algo que de verdad necesita accion.
+    public List<AsignacionGlobalResponse> pendientesRevisionGlobal() {
+        return asignacionRepository.findByPendienteRevisionTrue().stream()
+                .map(this::toResponseGlobal)
+                .toList();
+    }
+
+    // Seccion "Compras Ágiles listas" de Home.jsx para GLOBAL -- ver
+    // AsignacionRepository.findByTipoAndEstado.
+    public List<AsignacionGlobalResponse> compraAgilCompletadasGlobal() {
+        return asignacionRepository.findByTipoAndEstado(TipoAsignacion.COMPRA_AGIL, EstadoAsignacion.COMPLETADO).stream()
+                .map(this::toResponseGlobal)
+                .toList();
+    }
+
+    // Uso EXCLUSIVO de InternalController (ver
+    // AsignacionRepository.findCodigosConAsignacion para el detalle de por
+    // que es GLOBAL/sin filtro).
+    public List<String> codigosConAsignacion(TipoAsignacion tipo) {
+        return asignacionRepository.findCodigosConAsignacion(tipo);
     }
 
     // Puede tocar el estado: GLOBAL (cualquiera), el ADMIN_EMPRESA dueño

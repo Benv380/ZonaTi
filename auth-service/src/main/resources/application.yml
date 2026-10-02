@@ -46,6 +46,16 @@ jwt:
   # 1 hora, en milisegundos.
   expiration-ms: ${JWT_EXPIRATION_MS:3600000}
 
+internal:
+  # Secreto compartido para llamadas servidor-a-servidor SIN un usuario
+  # logueado de por medio (ej: LimpiezaScheduler en compra-service/
+  # licitacion-service preguntando "que codigos tienen asignacion" antes
+  # de purgar cache -- ver InternalController). Mismo criterio que
+  # JWT_SECRET/CHILECOMPRA_ENCRYPTION_KEY: sin default, tiene que
+  # coincidir EXACTO en los 3 servicios (.env, no se commitea). Generarlo
+  # con: openssl rand -base64 32
+  service-key: ${INTERNAL_SERVICE_KEY}
+
 chilecompra:
   # Clave AES-256 (32 bytes en base64) para cifrar/descifrar
   # Empresa.chileCompraPasswordCifrada (ver CifradoAesService) -- sin

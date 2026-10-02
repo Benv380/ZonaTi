@@ -58,6 +58,14 @@ public class SecurityConfig {
                         // Authorization (ver AuthController).
                         .requestMatchers("/auth/refresh", "/auth/logout").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
+                        // Llamadas servidor-a-servidor sin JWT (no hay usuario
+                        // logueado detras, ej: un scheduler en background) --
+                        // el propio InternalController verifica a mano el
+                        // header X-Internal-Key contra internal.service-key,
+                        // asi que igual queda cerrado a quien no tenga el
+                        // secreto compartido, solo que con otro mecanismo que
+                        // el JWT normal.
+                        .requestMatchers("/auth/internal/**").permitAll()
                         .anyRequest().authenticated())
                 // Sin esto, Spring Security usa su entry point default
                 // (Http403ForbiddenEntryPoint) para CUALQUIER request sin

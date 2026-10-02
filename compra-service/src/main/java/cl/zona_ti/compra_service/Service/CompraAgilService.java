@@ -22,6 +22,7 @@ import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilDetalleResponse;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilError;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilListadoResponse;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.Detalle;
+import cl.zona_ti.compra_service.Dto.CompraAgilDto.FiltrosVista;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.Item;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.Listado;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.Paginacion;
@@ -125,9 +126,9 @@ public class CompraAgilService {
     //   - Multi-filtro (2026-09-23): una empresa puede tener VARIOS
     //     filtros guardados -- se busca la UNION de todos (una compra
     //     aparece si matchea AL MENOS uno), deduplicando por codigo.
-    public CompraAgilListadoResponse buscarPorPerfil(AuthenticatedPrincipal principal, String authorizationHeader, int pagina, int tamano) {
+    public CompraAgilListadoResponse buscarPorPerfil(AuthenticatedPrincipal principal, String authorizationHeader, int pagina, int tamano, FiltrosVista filtros) {
         if (principal == null || principal.alcance() == Alcance.GLOBAL) {
-            return listarUltimasOchoHorasCacheado(principal, authorizationHeader, pagina, tamano);
+            return listarUltimasOchoHorasCacheado(principal, authorizationHeader, pagina, tamano, filtros);
         }
 
         List<PerfilBusquedaDto> perfiles;
@@ -142,7 +143,8 @@ public class CompraAgilService {
 
         // LinkedHashMap para deduplicar por codigo sin perder del todo el
         // orden (cada sub-busqueda ya viene ordenada por fecha_publicacion
-        // desc; se reordena igual abajo por si se mezclaron).
+        // desc; se reordena igual abajo, o segun "filtros" si se pidio un
+        // orden distinto -- ver aplicarFiltros()).
         LinkedHashMap<String, CompraAgilEntity> combinadas = new LinkedHashMap<>();
         for (PerfilBusquedaDto perfil : perfiles) {
             String texto = perfil.palabrasClave() != null ? perfil.palabrasClave() : "";
@@ -151,10 +153,7 @@ public class CompraAgilService {
                 combinadas.putIfAbsent(entidad.getCodigo(), entidad);
             }
         }
-        List<CompraAgilEntity> ordenadas = combinadas.values().stream()
-                .sorted(Comparator.comparing(CompraAgilEntity::getFechaPublicacion, Comparator.nullsLast(Comparator.reverseOrder())))
-                .toList();
-        return paginarCacheado(ordenadas, pagina, tamano);
+        return paginarCacheado(List.copyOf(combinadas.values()), pagina, tamano, filtros);
     }
 
     // Panel "perfil del comprador" (pedido 2026-09-25): agrega, del lado
@@ -460,6 +459,32 @@ public class CompraAgilService {
         return listar(filtros);
     }
 
+    // Uso EXCLUSIVO de CompraAgilSyncScheduler -- complementa
+    // sincronizarUltimasOchoHoras() de arriba (que solo trae compras
+    // publicadas en las ultimas 48h). Una compra con un cierre lejano (2do
+    // llamado, plazos largos) sale de esa ventana de publicacion mucho
+    // antes de cerrar de verdad, y sin esto quedaba con su estado/fecha de
+    // cierre congelados para siempre. Ventana acotada a proposito (ver
+    // CompraAgilRepository.findCodigosProximosACerrar) para no multiplicar
+    // llamados en vivo a Mercado Publico re-chequeando compras que igual
+    // van a seguir abiertas por dias.
+    private static final long DIAS_ATRAS_RESYNC = 3;
+    private static final long HORAS_ADELANTE_RESYNC = 24;
+
+    public List<String> codigosProximosACerrar() {
+        LocalDateTime ahora = LocalDateTime.now();
+        return compraAgilRepository.findCodigosProximosACerrar(
+                ahora.minusDays(DIAS_ATRAS_RESYNC), ahora.plusHours(HORAS_ADELANTE_RESYNC));
+    }
+
+    // Uso EXCLUSIVO del panel de monitoreo (ver SyncController.salud()) --
+    // simple pass-through, solo para no exponer CompraAgilClient directo
+    // al controller (misma capa que el resto de los metodos de este
+    // service).
+    public CompraAgilClient.EstadoApiEnVivo pingVivo() {
+        return compraAgilClient.pingVivo();
+    }
+
     // Version rapida para servir al usuario: lee directo de lo que
     // CompraAgilSyncScheduler ya sincronizo en background, sin pegarle en
     // vivo a la API externa.
@@ -470,9 +495,9 @@ public class CompraAgilService {
     // paginan la respuesta -- reusa el mismo record Paginacion que ya
     // devuelve Mercado Publico para la busqueda en vivo (Puerta 2), asi
     // el front trata ambas respuestas igual.
-    public CompraAgilListadoResponse listarUltimasOchoHorasCacheado(AuthenticatedPrincipal principal, String authorizationHeader, int pagina, int tamano) {
+    public CompraAgilListadoResponse listarUltimasOchoHorasCacheado(AuthenticatedPrincipal principal, String authorizationHeader, int pagina, int tamano, FiltrosVista filtros) {
         LocalDateTime desde = LocalDateTime.now(ZoneOffset.UTC).minusHours(48);
-        return paginarCacheado(compraAgilRepository.findByFechaPublicacionDesde(desde), pagina, tamano);
+        return paginarCacheado(compraAgilRepository.findByFechaPublicacionDesde(desde), pagina, tamano, filtros);
     }
 
     // Igual que listarUltimasOchoHorasCacheado, pero acotado a las compras
@@ -480,10 +505,10 @@ public class CompraAgilService {
     // suficientes ofertas y el segundo todavia esta abierto) -- boton
     // "En 2do llamado" en CompraRapida.jsx. Mismo criterio de lectura
     // directa del cache, sin pegarle en vivo a la API externa.
-    public CompraAgilListadoResponse listarSegundoLlamadoCacheado(AuthenticatedPrincipal principal, String authorizationHeader, int pagina, int tamano) {
+    public CompraAgilListadoResponse listarSegundoLlamadoCacheado(AuthenticatedPrincipal principal, String authorizationHeader, int pagina, int tamano, FiltrosVista filtros) {
         LocalDateTime desde = LocalDateTime.now(ZoneOffset.UTC).minusHours(48);
         LocalDateTime ahora = LocalDateTime.now(ZoneOffset.UTC);
-        return paginarCacheado(compraAgilRepository.findEnSegundoLlamadoDesde(desde, ahora), pagina, tamano);
+        return paginarCacheado(compraAgilRepository.findEnSegundoLlamadoDesde(desde, ahora), pagina, tamano, filtros);
     }
 
     // Barra de busqueda por palabra clave (ver CompraAgilController) --
@@ -492,8 +517,8 @@ public class CompraAgilService {
     // de buscar() para GLOBAL). Abierta a cualquier usuario autenticado,
     // mismo criterio que listarUltimasOchoHorasCacheado (la cartera
     // cacheada ya no se acota por perfil/asignaciones).
-    public CompraAgilListadoResponse buscarPorTexto(String texto, int pagina, int tamano) {
-        return paginarCacheado(compraAgilRepository.buscarPorTexto(texto), pagina, tamano);
+    public CompraAgilListadoResponse buscarPorTexto(String texto, int pagina, int tamano, FiltrosVista filtros) {
+        return paginarCacheado(compraAgilRepository.buscarPorTexto(texto), pagina, tamano, filtros);
     }
 
     // Compartido por listarUltimasOchoHorasCacheado y
@@ -501,8 +526,64 @@ public class CompraAgilService {
     // cache pero paginan igual (mismo record Paginacion que devuelve
     // Mercado Publico para la busqueda en vivo, asi el front trata ambas
     // respuestas igual).
-    private CompraAgilListadoResponse paginarCacheado(List<CompraAgilEntity> entidades, int pagina, int tamano) {
-        List<Item> items = entidades.stream()
+    // Cierre "real" a efectos de filtro/orden -- mismo criterio que ya usa
+    // el badge de cierre del front (ver fechas.js/DetalleItem.jsx): si hay
+    // 2do llamado vigente, ese es el que manda, no la fecha del 1ro (que ya
+    // paso y confundiria tanto el orden como el filtro por rango).
+    private static LocalDateTime cierreEfectivo(CompraAgilEntity c) {
+        return c.getFechaCierreSegundoLlamado() != null ? c.getFechaCierreSegundoLlamado() : c.getFechaCierre();
+    }
+
+    // Aplica filtros (region/monto/rango de cierre) y orden sobre lo que ya
+    // trajo la consulta base (todas/mi-filtro/2do llamado/busqueda por
+    // texto) -- ver CompraAgilDto.FiltrosVista. Todo en memoria: el
+    // universo que llega acá ya viene acotado por su propia consulta (48h
+    // de publicacion, o el perfil de la empresa), nunca es "toda la tabla".
+    private List<CompraAgilEntity> aplicarFiltros(List<CompraAgilEntity> entidades, FiltrosVista filtros) {
+        LocalDateTime ahora = LocalDateTime.now(ZoneOffset.UTC);
+        // Las que ya cerraron no se muestran en las listas -- pedido
+        // explicito 2026-09-30: solo se ven si se buscan a mano por codigo
+        // (getDetalleByCodigo NO pasa por este metodo). Sin cierreEfectivo
+        // (nunca se sincronizo el detalle completo) se deja pasar -- no hay
+        // forma de saber si cerro o no, mejor mostrarla que esconderla.
+        var stream = entidades.stream()
+                .filter(c -> cierreEfectivo(c) == null || cierreEfectivo(c).isAfter(ahora));
+
+        if (filtros != null) {
+            if (filtros.region() != null) {
+                stream = stream.filter(c -> filtros.region().equals(c.getRegion()));
+            }
+            if (filtros.montoMin() != null) {
+                stream = stream.filter(c -> montoRelevante(c) != null && montoRelevante(c).compareTo(filtros.montoMin()) >= 0);
+            }
+            if (filtros.montoMax() != null) {
+                stream = stream.filter(c -> montoRelevante(c) != null && montoRelevante(c).compareTo(filtros.montoMax()) <= 0);
+            }
+            if (filtros.cierreDesde() != null) {
+                LocalDateTime desde = filtros.cierreDesde().atStartOfDay();
+                stream = stream.filter(c -> cierreEfectivo(c) != null && !cierreEfectivo(c).isBefore(desde));
+            }
+            if (filtros.cierreHasta() != null) {
+                LocalDateTime hasta = filtros.cierreHasta().plusDays(1).atStartOfDay();
+                stream = stream.filter(c -> cierreEfectivo(c) != null && cierreEfectivo(c).isBefore(hasta));
+            }
+        }
+
+        Comparator<CompraAgilEntity> comparador = switch (filtros != null && filtros.ordenarPor() != null ? filtros.ordenarPor() : "cierre") {
+            case "publicacion" -> Comparator.comparing(CompraAgilEntity::getFechaPublicacion, Comparator.nullsLast(Comparator.naturalOrder()));
+            case "monto" -> Comparator.comparing(CompraAgilService::montoRelevante, Comparator.nullsLast(Comparator.naturalOrder()));
+            case "nombre" -> Comparator.comparing(CompraAgilEntity::getNombre, Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER));
+            default -> Comparator.comparing(CompraAgilService::cierreEfectivo, Comparator.nullsLast(Comparator.naturalOrder()));
+        };
+        if (filtros != null && "desc".equalsIgnoreCase(filtros.direccion())) {
+            comparador = comparador.reversed();
+        }
+
+        return stream.sorted(comparador).toList();
+    }
+
+    private CompraAgilListadoResponse paginarCacheado(List<CompraAgilEntity> entidades, int pagina, int tamano, FiltrosVista filtros) {
+        List<Item> items = aplicarFiltros(entidades, filtros).stream()
                 .map(compraAgilMapper::toItemDto)
                 .toList();
 

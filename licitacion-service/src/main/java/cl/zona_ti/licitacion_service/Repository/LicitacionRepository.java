@@ -31,4 +31,10 @@ public interface LicitacionRepository extends JpaRepository<LicitacionEntity, St
     @Query("SELECT DISTINCT l FROM LicitacionEntity l LEFT JOIN FETCH l.items "
             + "WHERE l.fechaPublicacion >= :desde ORDER BY l.fechaPublicacion DESC")
     List<LicitacionEntity> findByFechaPublicacionDesde(@Param("desde") LocalDateTime desde);
+
+    // Usada por LimpiezaScheduler -- mismo criterio que
+    // CompraAgilRepository.findCodigosCerradosAntesDe (compra-service), sin
+    // 2do llamado (Licitacion no tiene ese concepto).
+    @Query("SELECT l.codigoExterno FROM LicitacionEntity l WHERE l.fechaCierre < :limite")
+    List<String> findCodigosCerradosAntesDe(@Param("limite") LocalDateTime limite);
 }

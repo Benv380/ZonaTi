@@ -1,5 +1,9 @@
 package cl.zona_ti.licitacion_service.Controller;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
+
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.CrossOrigin;
@@ -10,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import cl.zona_ti.licitacion_service.Dto.LicitacionDto.FiltrosVista;
 import cl.zona_ti.licitacion_service.Dto.LicitacionDto.LicitacionResponse;
 import cl.zona_ti.licitacion_service.Security.AuthenticatedPrincipal;
 import cl.zona_ti.licitacion_service.Service.LicitacionService;
@@ -60,25 +65,43 @@ public class LicitacionController {
             @AuthenticationPrincipal AuthenticatedPrincipal principal,
             @RequestHeader("Authorization") String authorization,
             @RequestParam(defaultValue = "1") int pagina,
-            @RequestParam(defaultValue = "15") int tamano
+            @RequestParam(defaultValue = "15") int tamano,
+            @RequestParam(required = false) String ordenarPor,
+            @RequestParam(required = false) String direccion,
+            @RequestParam(required = false) String region,
+            @RequestParam(required = false) BigDecimal montoMin,
+            @RequestParam(required = false) BigDecimal montoMax,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreDesde,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreHasta
     ) {
-        return ResponseEntity.ok(licitacionService.listarUltimosDiasCacheado(principal, authorization, pagina, tamano));
+        FiltrosVista filtros = new FiltrosVista(ordenarPor, direccion, region, montoMin, montoMax, cierreDesde, cierreHasta);
+        return ResponseEntity.ok(licitacionService.listarUltimosDiasCacheado(principal, authorization, pagina, tamano, filtros));
     }
 
-    // "Ver mi filtro" -- acota lo mismo que /listar por el perfil de
-    // busqueda de la empresa (rubro/palabras clave/region). Ver
-    // LicitacionService.buscarConFiltroEmpresa para el detalle de por que
-    // es un filtro LOCAL y no una busqueda en vivo (a diferencia de
-    // /compra/agil, la API de licitaciones no lo soporta). Misma
-    // paginacion que /listar.
+    // "Mis rubros" (antes "Ver mi filtro") -- acota lo mismo que /listar
+    // por el perfil de busqueda de la empresa (rubro/palabras clave/
+    // region). Ver LicitacionService.buscarConFiltroEmpresa para el
+    // detalle de por que es un filtro LOCAL y no una busqueda en vivo (a
+    // diferencia de /compra/agil, la API de licitaciones no lo soporta).
+    // "region" NO se recibe acá por query string a proposito (mismo
+    // motivo que CompraAgilController.buscarPorPerfil en compra-service)
+    // -- siempre usa el perfil propio para ESO; el resto de filtros si son
+    // del cliente.
     @GetMapping("/mi-filtro")
     public ResponseEntity<LicitacionResponse> buscarConFiltroEmpresa(
             @AuthenticationPrincipal AuthenticatedPrincipal principal,
             @RequestHeader("Authorization") String authorization,
             @RequestParam(defaultValue = "1") int pagina,
-            @RequestParam(defaultValue = "15") int tamano
+            @RequestParam(defaultValue = "15") int tamano,
+            @RequestParam(required = false) String ordenarPor,
+            @RequestParam(required = false) String direccion,
+            @RequestParam(required = false) BigDecimal montoMin,
+            @RequestParam(required = false) BigDecimal montoMax,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreDesde,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreHasta
     ) {
-        return ResponseEntity.ok(licitacionService.buscarConFiltroEmpresa(principal, authorization, pagina, tamano));
+        FiltrosVista filtros = new FiltrosVista(ordenarPor, direccion, null, montoMin, montoMax, cierreDesde, cierreHasta);
+        return ResponseEntity.ok(licitacionService.buscarConFiltroEmpresa(principal, authorization, pagina, tamano, filtros));
     }
 
 }

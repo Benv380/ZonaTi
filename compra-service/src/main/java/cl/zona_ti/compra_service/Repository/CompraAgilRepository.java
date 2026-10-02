@@ -86,4 +86,31 @@ public interface CompraAgilRepository extends JpaRepository<CompraAgilEntity, St
     // JOIN FETCH de documentos -- el perfil no los necesita, evita traer
     // datos de mas.
     List<CompraAgilEntity> findByRutInstitucion(String rutInstitucion);
+
+    // Usada por CompraAgilSyncScheduler para re-sincronizar compras que ya
+    // cacheamos pero que el listado de "ultimas 8 horas" (ver
+    // findByFechaPublicacionDesde/CompraAgilService.sincronizarUltimasOchoHoras)
+    // dejo de traer -- ese listado se filtra por fecha de PUBLICACION, asi
+    // que una compra con un cierre lejano (2do llamado, plazos largos)
+    // deja de actualizarse ni bien pasan 8h desde que se publico, aunque
+    // siga abierta. Bug real detectado 2026-09-30: el estado/fecha de
+    // cierre quedaba congelado con el ultimo valor sincronizado, sin
+    // reflejar que Mercado Publico ya la habia cerrado.
+    //
+    // Ventana acotada a proposito (no "todo lo que sigue abierto"): solo
+    // las que cierran pronto o cerraron hace poco. Una compra que cierra
+    // en 5 dias no necesita re-chequearse cada 10 minutos -- cada codigo
+    // sincronizado es un llamado HTTP en vivo a Mercado Publico.
+    @Query("SELECT c.codigo FROM CompraAgilEntity c "
+            + "WHERE COALESCE(c.fechaCierreSegundoLlamado, c.fechaCierre) BETWEEN :desde AND :hasta")
+    List<String> findCodigosProximosACerrar(@Param("desde") LocalDateTime desde, @Param("hasta") LocalDateTime hasta);
+
+    // Usada por LimpiezaScheduler -- compras cuyo cierre real (2do llamado
+    // si existe, si no el normal) paso hace mas de "limite" (ver
+    // DIAS_BORRAR_ADJUNTOS/DIAS_BORRAR_FILA ahi). Sin filtro de asignacion
+    // -- eso se cruza aparte en el scheduler (AsignacionInternoClient),
+    // este metodo solo mira fechas.
+    @Query("SELECT c.codigo FROM CompraAgilEntity c "
+            + "WHERE COALESCE(c.fechaCierreSegundoLlamado, c.fechaCierre) < :limite")
+    List<String> findCodigosCerradosAntesDe(@Param("limite") LocalDateTime limite);
 }

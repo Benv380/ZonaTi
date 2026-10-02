@@ -35,6 +35,23 @@ public class CompraAgilDto {
             String detalle) {
     }
 
+    // Filtros/orden del panel de CompraRapida.jsx -- se aplican EN MEMORIA
+    // sobre lo que ya devolvio la consulta base (todas/mi-filtro/2do
+    // llamado), ver CompraAgilService.aplicarFiltros(). "region" es el
+    // codigo oficial (I a XVI, RM=13, ver regionesComunas.js), no el
+    // nombre -- CompraAgilEntity.region ya lo guarda como Integer.
+    // ordenarPor: "cierre" (default) | "publicacion" | "monto" | "nombre".
+    // direccion: "asc" (default) | "desc".
+    public record FiltrosVista(
+            String ordenarPor,
+            String direccion,
+            Integer region,
+            java.math.BigDecimal montoMin,
+            java.math.BigDecimal montoMax,
+            java.time.LocalDate cierreDesde,
+            java.time.LocalDate cierreHasta) {
+    }
+
     // ---- Listado (payload de GET /v2/compra-agil) ----
 
     @JsonIgnoreProperties(ignoreUnknown = true)

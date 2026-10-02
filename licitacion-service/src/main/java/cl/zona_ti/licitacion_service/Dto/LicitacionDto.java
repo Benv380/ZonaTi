@@ -35,6 +35,24 @@ public class LicitacionDto {
             Integer total_resultados) {
     }
 
+    // Filtros/orden del panel de Licitacion.jsx -- mismo concepto que
+    // CompraAgilDto.FiltrosVista (compra-service), se aplican en memoria
+    // (ver LicitacionService.aplicarFiltros()). "region" acá es el NOMBRE
+    // (ej. "Valparaíso"), no un codigo -- LicitacionEntity.regionUnidad es
+    // texto libre tal cual lo manda Mercado Publico, la API de Licitacion
+    // (v1) no tiene un codigo de region propio como si tiene Compra Agil
+    // v2. ordenarPor: "cierre" (default) | "publicacion" | "monto" |
+    // "nombre". direccion: "asc" (default) | "desc".
+    public record FiltrosVista(
+            String ordenarPor,
+            String direccion,
+            String region,
+            java.math.BigDecimal montoMin,
+            java.math.BigDecimal montoMax,
+            java.time.LocalDate cierreDesde,
+            java.time.LocalDate cierreHasta) {
+    }
+
     // Solo se declaran los campos que efectivamente se usan/guardan; el resto
     // de lo que trae Mercado Publico (Etapas, TomaRazon, JustificacionPublicidad,
     // CodigoBIP, etc.) se sigue ignorando a proposito via @JsonIgnoreProperties.

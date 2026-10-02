@@ -69,6 +69,13 @@ auth-service:
   # este default es para levantar licitacion-service suelto en dev local.
   url: ${AUTH_SERVICE_URL:http://localhost:8081}
 
+internal:
+  # Mismo secreto que internal.service-key en auth-service (ver ese
+  # application.yml) -- TIENE que coincidir EXACTO en los 3 servicios,
+  # igual que JWT_SECRET. Lo usa AsignacionInternoClient (LimpiezaScheduler)
+  # para autenticarse sin un JWT de usuario.
+  service-key: ${INTERNAL_SERVICE_KEY}
+
 scraper-service:
   # Donde vive scraper-service (Python + Playwright) -- lo usa
   # LicitacionAttachmentScraperClient para pedir los adjuntos de una

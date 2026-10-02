@@ -18,6 +18,7 @@ import cl.zona_ti.licitacion_service.Dto.LicitacionDto.LicitacionResponse;
 import cl.zona_ti.licitacion_service.Model.AdjuntoLicitacionEntity;
 import cl.zona_ti.licitacion_service.Repository.AdjuntoLicitacionRepository;
 import cl.zona_ti.licitacion_service.Service.LicitacionService;
+import cl.zona_ti.licitacion_service.Service.SyncHealthService;
 import jakarta.annotation.PreDestroy;
 
 /**
@@ -47,22 +48,28 @@ public class LicitacionSyncScheduler {
 
     private static final int POOL_SIZE = 2;
 
+    public static final String JOB_ADJUNTOS = "licitacion-adjuntos";
+
     private final LicitacionAttachmentScraperClient scraper;
     private final AdjuntoLicitacionRepository repository;
     private final LicitacionService licitacionService;
+    private final SyncHealthService syncHealthService;
     private final ExecutorService pool = Executors.newFixedThreadPool(POOL_SIZE);
 
     public LicitacionSyncScheduler(LicitacionAttachmentScraperClient scraper,
                                     AdjuntoLicitacionRepository repository,
-                                    LicitacionService licitacionService) {
+                                    LicitacionService licitacionService,
+                                    SyncHealthService syncHealthService) {
         this.scraper = scraper;
         this.repository = repository;
         this.licitacionService = licitacionService;
+        this.syncHealthService = syncHealthService;
     }
 
     @Scheduled(fixedDelayString = "${licitacion-service.sync.fixed-delay:PT10M}")
     public void sincronizarAdjuntos() {
         List<String> codigosDelPeriodo = obtenerCodigosLicitacionesRecientes();
+        syncHealthService.iniciarCiclo(JOB_ADJUNTOS);
         if (codigosDelPeriodo.isEmpty()) {
             log.debug("Sync adjuntos: no hay licitaciones recientes en este ciclo.");
             return;
@@ -109,12 +116,14 @@ public class LicitacionSyncScheduler {
 
             repository.saveAll(nuevos);
             log.info("Sync adjuntos OK para {}: {} archivo(s).", codigo, nuevos.size());
+            syncHealthService.registrarExito(JOB_ADJUNTOS);
 
         } catch (Exception e) {
             // No relanzar: un fallo en una licitación no debe tumbar el pool ni
             // afectar a las demás que se están procesando en paralelo. Reintentará
             // solo en el próximo ciclo (sigue "pendiente" porque no quedó guardada).
             log.warn("Sync adjuntos FALLÓ para {}: {}", codigo, e.getMessage());
+            syncHealthService.registrarError(JOB_ADJUNTOS, e.getMessage());
         }
     }
 

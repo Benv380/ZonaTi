@@ -45,7 +45,16 @@ public final class FechaParser {
         return null;
     }
 
+    // Las LocalDateTime que maneja este parser SIEMPRE representan un
+    // instante UTC (ver parse() arriba, que normaliza todo a ZoneOffset.UTC
+    // antes de guardar) -- pero LocalDateTime no lleva marca de zona, asi
+    // que formatear sin mas perdia esa "Z" en el JSON de salida. Bug real
+    // detectado 2026-09-30: un ISO-8601 SIN zona ("2026-09-30T12:45:37") lo
+    // interpreta el navegador como hora LOCAL, no UTC -- new Date() en
+    // Chile corria el reloj ~3-4h hacia adelante, mostrando "Cierra en Xh"
+    // en compras/licitaciones que ya habian cerrado hace rato. Con el "Z"
+    // explicito, new Date() en el navegador lo interpreta como UTC.
     public static String format(LocalDateTime fecha) {
-        return fecha == null ? null : fecha.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        return fecha == null ? null : fecha.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + "Z";
     }
 }

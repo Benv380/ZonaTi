@@ -1,13 +1,18 @@
 package cl.zona_ti.licitacion_service.Controller;
 
+import java.util.List;
+
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import cl.zona_ti.licitacion_service.Scheduler.LicitacionSyncScheduler;
+import cl.zona_ti.licitacion_service.Service.SyncHealthService;
+import cl.zona_ti.licitacion_service.Service.SyncHealthService.EstadoJob;
 
 /**
  * Dispara a mano un ciclo de sincronización, sin esperar al próximo tick del
@@ -30,9 +35,11 @@ import cl.zona_ti.licitacion_service.Scheduler.LicitacionSyncScheduler;
 public class SyncController {
 
     private final LicitacionSyncScheduler licitacionSyncScheduler;
+    private final SyncHealthService syncHealthService;
 
-    public SyncController(LicitacionSyncScheduler licitacionSyncScheduler) {
+    public SyncController(LicitacionSyncScheduler licitacionSyncScheduler, SyncHealthService syncHealthService) {
         this.licitacionSyncScheduler = licitacionSyncScheduler;
+        this.syncHealthService = syncHealthService;
     }
 
     // POST /compra/sync/licitaciones -- exclusivo GLOBAL, ahora que el
@@ -44,5 +51,20 @@ public class SyncController {
     public ResponseEntity<Void> sincronizarLicitaciones() {
         new Thread(licitacionSyncScheduler::sincronizarAdjuntos, "sync-licitaciones-manual").start();
         return ResponseEntity.accepted().build();
+    }
+
+    // GET /compra/sync/salud-licitacion -- exclusivo GLOBAL. Panel de
+    // monitoreo en Administracion.jsx: estado de los schedulers de ESTE
+    // servicio (adjuntos de licitacion, limpieza). Path DISTINTO al
+    // "/compra/sync/salud" de compra-service a proposito -- el gateway
+    // rutea por path literal (ver GatewayRoutesConfig), necesita un nombre
+    // propio para saber a cual de los 2 servicios mandar cada uno. Sin
+    // chequeo en vivo de Mercado Publico (a diferencia de compra-service)
+    // -- Api-Prueba tampoco lo tiene para Licitacion, no es gold-plating
+    // agregarlo aca.
+    @GetMapping("/salud-licitacion")
+    @PreAuthorize("hasRole('GLOBAL')")
+    public List<EstadoJob> salud() {
+        return syncHealthService.snapshot();
     }
 }

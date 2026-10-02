@@ -24,6 +24,7 @@ import cl.zona_ti.auth_service.Dto.AsignacionEmpresaResumen;
 import cl.zona_ti.auth_service.Dto.AsignacionGlobalResponse;
 import cl.zona_ti.auth_service.Dto.AsignacionResponse;
 import cl.zona_ti.auth_service.Dto.CrearAsignacionRequest;
+import cl.zona_ti.auth_service.Model.EstadoAsignacion;
 import cl.zona_ti.auth_service.Model.TipoAsignacion;
 import cl.zona_ti.auth_service.Security.AuthenticatedPrincipal;
 import cl.zona_ti.auth_service.Service.AsignacionService;
@@ -141,11 +142,44 @@ public class AsignacionController {
 
     // Panel GLOBAL de "todas las empresas juntas" (ver Administracion.jsx)
     // -- exclusivo ADMIN, ninguna otra pantalla necesita mezclar
-    // asignaciones de mas de una empresa a la vez.
+    // asignaciones de mas de una empresa a la vez. Paginado + filtros
+    // server-side (ver AsignacionService.listarTodasPaginado) -- todos los
+    // parametros son opcionales, sin ninguno trae la primera pagina de
+    // TODO ordenado por mas reciente primero.
     @GetMapping("/auth/asignaciones")
     @PreAuthorize("hasRole('GLOBAL')")
-    public ResponseEntity<List<AsignacionGlobalResponse>> listarTodas() {
-        return ResponseEntity.ok(asignacionService.listarTodas());
+    public ResponseEntity<AsignacionService.AsignacionGlobalPaginada> listarTodas(
+            @RequestParam(required = false) Long empresaId,
+            @RequestParam(required = false) Long usuarioId,
+            @RequestParam(required = false) TipoAsignacion tipo,
+            @RequestParam(required = false) EstadoAsignacion estado,
+            @RequestParam(defaultValue = "1") int pagina,
+            @RequestParam(defaultValue = "20") int tamano
+    ) {
+        return ResponseEntity.ok(asignacionService.listarTodasPaginado(empresaId, usuarioId, tipo, estado, pagina, tamano));
+    }
+
+    // Separado de listarTodas a proposito -- ver AsignacionService.
+    // pendientesRevisionGlobal.
+    @GetMapping("/auth/asignaciones/pendientes-revision")
+    @PreAuthorize("hasRole('GLOBAL')")
+    public ResponseEntity<List<AsignacionGlobalResponse>> pendientesRevisionGlobal() {
+        return ResponseEntity.ok(asignacionService.pendientesRevisionGlobal());
+    }
+
+    // StatCards de Home.jsx para GLOBAL -- ver AsignacionService.resumenGlobal.
+    @GetMapping("/auth/asignaciones/resumen")
+    @PreAuthorize("hasRole('GLOBAL')")
+    public ResponseEntity<AsignacionService.ResumenGlobal> resumenGlobal() {
+        return ResponseEntity.ok(asignacionService.resumenGlobal());
+    }
+
+    // Seccion "Compras Ágiles listas" de Home.jsx para GLOBAL -- ver
+    // AsignacionService.compraAgilCompletadasGlobal.
+    @GetMapping("/auth/asignaciones/compra-agil-completadas")
+    @PreAuthorize("hasRole('GLOBAL')")
+    public ResponseEntity<List<AsignacionGlobalResponse>> compraAgilCompletadasGlobal() {
+        return ResponseEntity.ok(asignacionService.compraAgilCompletadasGlobal());
     }
 
     // Sin @PreAuthorize a nivel de rol -- el permiso real (dueño de la

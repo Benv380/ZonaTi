@@ -4,10 +4,12 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
@@ -19,6 +21,7 @@ import org.springframework.stereotype.Service;
 
 import cl.zona_ti.licitacion_service.Client.LicitacionClient;
 import cl.zona_ti.licitacion_service.Client.PerfilClient;
+import cl.zona_ti.licitacion_service.Dto.LicitacionDto.FiltrosVista;
 import cl.zona_ti.licitacion_service.Dto.LicitacionDto.Licitacion;
 import cl.zona_ti.licitacion_service.Dto.LicitacionDto.LicitacionResponse;
 import cl.zona_ti.licitacion_service.Dto.LicitacionDto.Paginacion;
@@ -222,9 +225,9 @@ public class LicitacionService {
     // recomendarle a su supervisor algo que todavia no le asignaron a el).
     // "pagina"/"tamano" evitan mandar de un tiron las ~300-400 licitaciones
     // de la ventana entera -- ver paginar().
-    public LicitacionResponse listarUltimosDiasCacheado(AuthenticatedPrincipal principal, String authorizationHeader, int pagina, int tamano) {
+    public LicitacionResponse listarUltimosDiasCacheado(AuthenticatedPrincipal principal, String authorizationHeader, int pagina, int tamano, FiltrosVista filtros) {
         LocalDateTime desde = ZonedDateTime.now(ZONA_CHILE).minusDays(diasListado).toLocalDateTime();
-        List<Licitacion> listado = licitacionRepository.findByFechaPublicacionDesde(desde).stream()
+        List<Licitacion> listado = aplicarFiltros(licitacionRepository.findByFechaPublicacionDesde(desde), filtros).stream()
                 .map(licitacionMapper::toDto)
                 .toList();
 
@@ -247,9 +250,9 @@ public class LicitacionService {
     // los filtros por perfil. Multi-filtro (2026-09-23): una empresa puede
     // tener VARIOS filtros -- se busca la UNION de todos (una licitacion
     // aparece si matchea AL MENOS uno), deduplicando por codigoExterno.
-    public LicitacionResponse buscarConFiltroEmpresa(AuthenticatedPrincipal principal, String authorizationHeader, int pagina, int tamano) {
+    public LicitacionResponse buscarConFiltroEmpresa(AuthenticatedPrincipal principal, String authorizationHeader, int pagina, int tamano, FiltrosVista filtros) {
         if (principal == null || principal.alcance() == Alcance.GLOBAL) {
-            return listarUltimosDiasCacheado(principal, authorizationHeader, pagina, tamano);
+            return listarUltimosDiasCacheado(principal, authorizationHeader, pagina, tamano, filtros);
         }
 
         List<PerfilBusquedaDto> perfiles = obtenerPerfiles(authorizationHeader);
@@ -258,24 +261,25 @@ public class LicitacionService {
         }
 
         LocalDateTime desde = ZonedDateTime.now(ZONA_CHILE).minusDays(diasListado).toLocalDateTime();
-        List<Licitacion> cacheadas = licitacionRepository.findByFechaPublicacionDesde(desde).stream()
-                .map(licitacionMapper::toDto)
-                .toList();
+        List<LicitacionEntity> cacheadas = licitacionRepository.findByFechaPublicacionDesde(desde);
 
-        LinkedHashMap<String, Licitacion> combinadas = new LinkedHashMap<>();
+        LinkedHashMap<String, LicitacionEntity> combinadas = new LinkedHashMap<>();
         for (PerfilBusquedaDto perfil : perfiles) {
             if (perfil.palabrasClave() == null || perfil.palabrasClave().isBlank()) {
                 continue;
             }
             List<String> palabras = List.of(perfil.palabrasClave().toLowerCase().split("\\s+"));
-            for (Licitacion licitacion : cacheadas) {
+            for (LicitacionEntity licitacion : cacheadas) {
                 if (coincideConPerfil(licitacion, palabras, perfil.regionNombre())) {
-                    combinadas.putIfAbsent(licitacion.codigoExterno(), licitacion);
+                    combinadas.putIfAbsent(licitacion.getCodigoExterno(), licitacion);
                 }
             }
         }
 
-        return paginar(List.copyOf(combinadas.values()), pagina, tamano);
+        List<Licitacion> listado = aplicarFiltros(List.copyOf(combinadas.values()), filtros).stream()
+                .map(licitacionMapper::toDto)
+                .toList();
+        return paginar(listado, pagina, tamano);
     }
 
     // Recorta "listado" (ya ordenado por fecha de publicacion DESC, ver
@@ -297,9 +301,9 @@ public class LicitacionService {
                 new Paginacion(totalPaginas, pag, tam, listado.size()));
     }
 
-    private boolean coincideConPerfil(Licitacion licitacion, List<String> palabrasClave, String regionNombre) {
-        String texto = ((licitacion.nombre() != null ? licitacion.nombre() : "")
-                + " " + (licitacion.descripcion() != null ? licitacion.descripcion() : "")).toLowerCase();
+    private boolean coincideConPerfil(LicitacionEntity licitacion, List<String> palabrasClave, String regionNombre) {
+        String texto = ((licitacion.getNombre() != null ? licitacion.getNombre() : "")
+                + " " + (licitacion.getDescripcion() != null ? licitacion.getDescripcion() : "")).toLowerCase();
         boolean coincideTexto = palabrasClave.stream().anyMatch(texto::contains);
         if (!coincideTexto) {
             return false;
@@ -307,8 +311,56 @@ public class LicitacionService {
         if (regionNombre == null || regionNombre.isBlank()) {
             return true;
         }
-        String regionLicitacion = licitacion.comprador() != null ? licitacion.comprador().regionUnidad() : null;
+        String regionLicitacion = licitacion.getRegionUnidad();
         return regionLicitacion != null && regionLicitacion.toLowerCase().contains(regionNombre.toLowerCase());
+    }
+
+    // Filtros/orden del panel de Licitacion.jsx (ver LicitacionDto.
+    // FiltrosVista) -- mismo criterio que CompraAgilService.aplicarFiltros
+    // (compra-service), todo en memoria sobre el universo que ya trajo la
+    // consulta base. "region" es un CONTAINS case-insensitive (no exacto):
+    // regionUnidad es texto libre de Mercado Publico, no un codigo.
+    private List<LicitacionEntity> aplicarFiltros(List<LicitacionEntity> entidades, FiltrosVista filtros) {
+        LocalDateTime ahora = LocalDateTime.now(ZoneOffset.UTC);
+        // Las que ya cerraron no se muestran en las listas -- solo se ven
+        // buscando a mano por codigo (getLicitacionByCodigo no pasa por
+        // este metodo). Sin fechaCierre se deja pasar, no hay forma de
+        // saber si cerro.
+        var stream = entidades.stream()
+                .filter(l -> l.getFechaCierre() == null || l.getFechaCierre().isAfter(ahora));
+
+        if (filtros != null) {
+            if (filtros.region() != null && !filtros.region().isBlank()) {
+                String regionBuscada = filtros.region().toLowerCase();
+                stream = stream.filter(l -> l.getRegionUnidad() != null && l.getRegionUnidad().toLowerCase().contains(regionBuscada));
+            }
+            if (filtros.montoMin() != null) {
+                stream = stream.filter(l -> l.getMontoEstimado() != null && l.getMontoEstimado().compareTo(filtros.montoMin()) >= 0);
+            }
+            if (filtros.montoMax() != null) {
+                stream = stream.filter(l -> l.getMontoEstimado() != null && l.getMontoEstimado().compareTo(filtros.montoMax()) <= 0);
+            }
+            if (filtros.cierreDesde() != null) {
+                LocalDateTime desde = filtros.cierreDesde().atStartOfDay();
+                stream = stream.filter(l -> l.getFechaCierre() != null && !l.getFechaCierre().isBefore(desde));
+            }
+            if (filtros.cierreHasta() != null) {
+                LocalDateTime hasta = filtros.cierreHasta().plusDays(1).atStartOfDay();
+                stream = stream.filter(l -> l.getFechaCierre() != null && l.getFechaCierre().isBefore(hasta));
+            }
+        }
+
+        Comparator<LicitacionEntity> comparador = switch (filtros != null && filtros.ordenarPor() != null ? filtros.ordenarPor() : "cierre") {
+            case "publicacion" -> Comparator.comparing(LicitacionEntity::getFechaPublicacion, Comparator.nullsLast(Comparator.naturalOrder()));
+            case "monto" -> Comparator.comparing(LicitacionEntity::getMontoEstimado, Comparator.nullsLast(Comparator.naturalOrder()));
+            case "nombre" -> Comparator.comparing(LicitacionEntity::getNombre, Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER));
+            default -> Comparator.comparing(LicitacionEntity::getFechaCierre, Comparator.nullsLast(Comparator.naturalOrder()));
+        };
+        if (filtros != null && "desc".equalsIgnoreCase(filtros.direccion())) {
+            comparador = comparador.reversed();
+        }
+
+        return stream.sorted(comparador).toList();
     }
 
     private List<PerfilBusquedaDto> obtenerPerfiles(String authorizationHeader) {

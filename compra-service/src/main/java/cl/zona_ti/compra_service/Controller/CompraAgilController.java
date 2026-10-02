@@ -1,7 +1,10 @@
 package cl.zona_ti.compra_service.Controller;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.Map;
 
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.CrossOrigin;
@@ -14,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilDetalleResponse;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilListadoResponse;
+import cl.zona_ti.compra_service.Dto.CompraAgilDto.FiltrosVista;
 import cl.zona_ti.compra_service.Dto.PerfilCompradorResponse;
 import cl.zona_ti.compra_service.Dto.PerfilVendedorResponse;
 import cl.zona_ti.compra_service.Security.AuthenticatedPrincipal;
@@ -28,6 +32,16 @@ public class CompraAgilController {
 
     public CompraAgilController(CompraAgilService compraAgilService) {
         this.compraAgilService = compraAgilService;
+    }
+
+    // Filtros/orden del panel de CompraRapida.jsx (ver CompraAgilDto.
+    // FiltrosVista) -- compartidos por /listar, /segundo-llamado,
+    // /mi-filtro y /buscar, asi que se arman una sola vez acá. Todos
+    // opcionales: sin ninguno, aplicarFiltros() ordena por cierre asc y no
+    // filtra nada (mismo comportamiento que antes de esta feature).
+    private static FiltrosVista filtrosDeQuery(String ordenarPor, String direccion, Integer region,
+            BigDecimal montoMin, BigDecimal montoMax, LocalDate cierreDesde, LocalDate cierreHasta) {
+        return new FiltrosVista(ordenarPor, direccion, region, montoMin, montoMax, cierreDesde, cierreHasta);
     }
 
     // Busqueda en vivo contra Mercado Publico, ej:
@@ -67,9 +81,17 @@ public class CompraAgilController {
             @AuthenticationPrincipal AuthenticatedPrincipal principal,
             @RequestHeader("Authorization") String authorization,
             @RequestParam(defaultValue = "1") int pagina,
-            @RequestParam(defaultValue = "15") int tamano
+            @RequestParam(defaultValue = "15") int tamano,
+            @RequestParam(required = false) String ordenarPor,
+            @RequestParam(required = false) String direccion,
+            @RequestParam(required = false) Integer region,
+            @RequestParam(required = false) BigDecimal montoMin,
+            @RequestParam(required = false) BigDecimal montoMax,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreDesde,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreHasta
     ) {
-        return ResponseEntity.ok(compraAgilService.listarUltimasOchoHorasCacheado(principal, authorization, pagina, tamano));
+        FiltrosVista filtros = filtrosDeQuery(ordenarPor, direccion, region, montoMin, montoMax, cierreDesde, cierreHasta);
+        return ResponseEntity.ok(compraAgilService.listarUltimasOchoHorasCacheado(principal, authorization, pagina, tamano, filtros));
     }
 
     // Mismo cache/ventana de 48h que /listar, pero solo las compras que ya
@@ -80,9 +102,17 @@ public class CompraAgilController {
             @AuthenticationPrincipal AuthenticatedPrincipal principal,
             @RequestHeader("Authorization") String authorization,
             @RequestParam(defaultValue = "1") int pagina,
-            @RequestParam(defaultValue = "15") int tamano
+            @RequestParam(defaultValue = "15") int tamano,
+            @RequestParam(required = false) String ordenarPor,
+            @RequestParam(required = false) String direccion,
+            @RequestParam(required = false) Integer region,
+            @RequestParam(required = false) BigDecimal montoMin,
+            @RequestParam(required = false) BigDecimal montoMax,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreDesde,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreHasta
     ) {
-        return ResponseEntity.ok(compraAgilService.listarSegundoLlamadoCacheado(principal, authorization, pagina, tamano));
+        FiltrosVista filtros = filtrosDeQuery(ordenarPor, direccion, region, montoMin, montoMax, cierreDesde, cierreHasta);
+        return ResponseEntity.ok(compraAgilService.listarSegundoLlamadoCacheado(principal, authorization, pagina, tamano, filtros));
     }
 
     // Barra de busqueda por palabra clave (ver CompraRapida.jsx) -- distinto
@@ -94,26 +124,42 @@ public class CompraAgilController {
     public ResponseEntity<CompraAgilListadoResponse> buscarPorTexto(
             @RequestParam String q,
             @RequestParam(defaultValue = "1") int pagina,
-            @RequestParam(defaultValue = "15") int tamano
+            @RequestParam(defaultValue = "15") int tamano,
+            @RequestParam(required = false) String ordenarPor,
+            @RequestParam(required = false) String direccion,
+            @RequestParam(required = false) Integer region,
+            @RequestParam(required = false) BigDecimal montoMin,
+            @RequestParam(required = false) BigDecimal montoMax,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreDesde,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreHasta
     ) {
-        return ResponseEntity.ok(compraAgilService.buscarPorTexto(q, pagina, tamano));
+        FiltrosVista filtros = filtrosDeQuery(ordenarPor, direccion, region, montoMin, montoMax, cierreDesde, cierreHasta);
+        return ResponseEntity.ok(compraAgilService.buscarPorTexto(q, pagina, tamano, filtros));
     }
 
-    // "Ver mi filtro" en CompraRapida.jsx -- reemplaza el viejo "/" (Puerta
-    // 2, en vivo contra Mercado Publico) para este uso puntual: busca en el
-    // cache local acotado por el rubro/palabras clave/region del perfil de
-    // la empresa del usuario autenticado. No recibe filtros por query
-    // string a proposito (a diferencia de "/") -- siempre usa el perfil
-    // propio, nunca lo que mande el cliente, mismo motivo de seguridad que
-    // ya tenia buscar().
+    // "Mis rubros" en CompraRapida.jsx (antes "Ver mi filtro") -- reemplaza
+    // el viejo "/" (Puerta 2, en vivo contra Mercado Publico) para este uso
+    // puntual: busca en el cache local acotado por el rubro/palabras
+    // clave/region del perfil de la empresa del usuario autenticado. No
+    // recibe "region" por query string a proposito (a diferencia de "/")
+    // -- siempre usa el perfil propio para ESO, nunca lo que mande el
+    // cliente; el resto de filtros (orden/monto/cierre) si son del cliente,
+    // se aplican DESPUES sobre ese universo ya acotado.
     @GetMapping("/mi-filtro")
     public ResponseEntity<CompraAgilListadoResponse> buscarPorPerfil(
             @AuthenticationPrincipal AuthenticatedPrincipal principal,
             @RequestHeader("Authorization") String authorization,
             @RequestParam(defaultValue = "1") int pagina,
-            @RequestParam(defaultValue = "15") int tamano
+            @RequestParam(defaultValue = "15") int tamano,
+            @RequestParam(required = false) String ordenarPor,
+            @RequestParam(required = false) String direccion,
+            @RequestParam(required = false) BigDecimal montoMin,
+            @RequestParam(required = false) BigDecimal montoMax,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreDesde,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreHasta
     ) {
-        return ResponseEntity.ok(compraAgilService.buscarPorPerfil(principal, authorization, pagina, tamano));
+        FiltrosVista filtros = filtrosDeQuery(ordenarPor, direccion, null, montoMin, montoMax, cierreDesde, cierreHasta);
+        return ResponseEntity.ok(compraAgilService.buscarPorPerfil(principal, authorization, pagina, tamano, filtros));
     }
 
     // Panel "perfil del comprador" que se abre al lado del detalle de una

@@ -31,13 +31,17 @@ public class GatewayRoutesConfig {
                 // AdjuntoController) y el trigger manual de sync
                 // (SyncController) -- todo lo que compra-service expone.
                 .route("compra-agil", r -> r
-                        .path("/compra/agil/**", "/compra/sync/compra-agil")
+                        .path("/compra/agil/**", "/compra/sync/compra-agil", "/compra/sync/salud")
                         .uri(compraAgilUrl))
                 // Licitaciones + sus adjuntos (el scraper Playwright corre
                 // adentro de licitacion-service) y su propio trigger manual
                 // de sync -- todo lo que licitacion-service expone.
+                // "/compra/sync/salud-licitacion" (no "/salud" a secas,
+                // como compra-service) porque el ruteo es por path literal
+                // -- necesitan nombres distintos para que el gateway sepa a
+                // cual de los 2 servicios mandar cada uno.
                 .route("licitacion", r -> r
-                        .path("/compra/licitacion/**", "/compra/sync/licitaciones")
+                        .path("/compra/licitacion/**", "/compra/sync/licitaciones", "/compra/sync/salud-licitacion")
                         .uri(licitacionUrl))
                 // Login/emision de JWT -- todo lo que auth-service expone.
                 // auth-service no publica puerto propio (ver docker-compose.yml):

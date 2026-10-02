@@ -87,6 +87,13 @@ auth-service:
   # suelto en dev local.
   url: ${AUTH_SERVICE_URL:http://localhost:8081}
 
+internal:
+  # Mismo secreto que internal.service-key en auth-service (ver ese
+  # application.yml) -- TIENE que coincidir EXACTO en los 2 servicios,
+  # igual que JWT_SECRET. Lo usa AsignacionInternoClient (LimpiezaScheduler)
+  # para autenticarse sin un JWT de usuario.
+  service-key: ${INTERNAL_SERVICE_KEY}
+
 mercado-publico:
   compra-agil:
     url: https://api2.mercadopublico.cl

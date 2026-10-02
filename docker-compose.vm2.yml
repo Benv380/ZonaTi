@@ -69,6 +69,12 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - JWT_SECRET=${AUTH_JWT_SECRET}
       - CHILECOMPRA_ENCRYPTION_KEY=${CHILECOMPRA_ENCRYPTION_KEY}
+      # Secreto compartido para llamadas servidor-a-servidor sin JWT de
+      # usuario (ej: LimpiezaScheduler en compra-service/licitacion-service
+      # preguntando que codigos tienen asignacion antes de purgar cache --
+      # ver InternalController). TIENE que ser el mismo valor en los 3
+      # servicios. Generarlo con: openssl rand -base64 32
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY}
     depends_on:
       - postgres
     restart: unless-stopped
@@ -83,6 +89,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - JWT_SECRET=${AUTH_JWT_SECRET}
       - AUTH_SERVICE_URL=http://auth-service:8081
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY}
       # RUT de cualquier organismo publico -- lo usa ReclamosTokenScheduler
       # para cargar la ficha publica de comprador de Mercado Publico y que
       # la pagina misma consiga su propio token (ver ReclamosClient/
@@ -103,6 +110,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - JWT_SECRET=${AUTH_JWT_SECRET}
       - AUTH_SERVICE_URL=http://auth-service:8081
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY}
       - SCRAPER_SERVICE_URL=http://scraper-service:8090
     depends_on:
       - scraper-service
