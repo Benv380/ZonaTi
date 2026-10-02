@@ -10,6 +10,7 @@ import java.util.concurrent.TimeoutException;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatusCode;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -115,13 +116,24 @@ public class CompraAgilClient {
         long inicio = System.currentTimeMillis();
         CompletableFuture<EstadoApiEnVivo> future = CompletableFuture.supplyAsync(() -> {
             try {
-                CompraAgilListadoResponse respuesta = pingClient.get()
+                // toEntity() (no solo .body()) para tener el status HTTP a
+                // mano -- antes, cuando la respuesta no calzaba con el
+                // envelope esperado (ej: una pagina de bloqueo por cuota
+                // diaria agotada, sin "success"/"errors"), el panel
+                // mostraba "success=null" sin explicar nada (bug real
+                // 2026-10-02: la cuota diaria se agoto de verdad). El
+                // status (ej. 429) ya es mucho mas util para diagnosticar.
+                ResponseEntity<CompraAgilListadoResponse> respuesta = pingClient.get()
                         .uri(uriBuilder -> uriBuilder.path("/v2/compra-agil").queryParam("tamano_pagina", "1").build())
                         .retrieve()
-                        .body(CompraAgilListadoResponse.class);
+                        .toEntity(CompraAgilListadoResponse.class);
                 long latencia = System.currentTimeMillis() - inicio;
-                boolean ok = respuesta != null && "OK".equalsIgnoreCase(respuesta.success());
-                String detalle = ok ? null : describirRespuestaInesperada(respuesta);
+
+                CompraAgilListadoResponse parseado = respuesta.getBody();
+                boolean ok = respuesta.getStatusCode().is2xxSuccessful()
+                        && parseado != null && "OK".equalsIgnoreCase(parseado.success());
+                String detalle = ok ? null
+                        : describirRespuestaInesperada(respuesta.getStatusCode().value(), parseado);
                 return new EstadoApiEnVivo(ok, latencia, detalle);
             } catch (Exception e) {
                 return new EstadoApiEnVivo(false, System.currentTimeMillis() - inicio, e.getMessage());
@@ -146,18 +158,20 @@ public class CompraAgilClient {
     // sobre defaultStatusHandler en el constructor) -- sin esto, el panel
     // de monitoreo solo mostraba "Respuesta inesperada de Mercado Público"
     // sin decir que devolvió realmente, nada util para diagnosticar.
-    private static String describirRespuestaInesperada(CompraAgilListadoResponse respuesta) {
-        if (respuesta == null) {
-            return "Respuesta vacía";
-        }
-        if (respuesta.errors() != null && !respuesta.errors().isEmpty()) {
-            return respuesta.errors().stream()
+    // "status" (2026-10-02): cuando "parseado" no calza con el envelope
+    // esperado (ej. una pagina de bloqueo por cuota agotada, sin "success"/
+    // "errors" -- Jackson igual arma el record, solo que con todo null),
+    // antes esto se veia como "success=null" sin explicar nada -- el
+    // status HTTP (ej. 429) ya ayuda bastante mas a diagnosticar.
+    private static String describirRespuestaInesperada(int status, CompraAgilListadoResponse parseado) {
+        if (parseado != null && parseado.errors() != null && !parseado.errors().isEmpty()) {
+            return parseado.errors().stream()
                     .map(err -> err.mensaje() != null ? err.mensaje() : err.codigo())
                     .filter(m -> m != null && !m.isBlank())
                     .reduce((a, b) -> a + "; " + b)
-                    .orElse("success=" + respuesta.success());
+                    .orElse("HTTP " + status + ", success=" + parseado.success());
         }
-        return "success=" + respuesta.success();
+        return "HTTP " + status + ", success=" + (parseado != null ? parseado.success() : null);
     }
 
 }
