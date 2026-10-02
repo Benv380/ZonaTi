@@ -40,8 +40,8 @@ public class CompraAgilController {
     // opcionales: sin ninguno, aplicarFiltros() ordena por cierre asc y no
     // filtra nada (mismo comportamiento que antes de esta feature).
     private static FiltrosVista filtrosDeQuery(String ordenarPor, String direccion, Integer region,
-            BigDecimal montoMin, BigDecimal montoMax, LocalDate cierreDesde, LocalDate cierreHasta) {
-        return new FiltrosVista(ordenarPor, direccion, region, montoMin, montoMax, cierreDesde, cierreHasta);
+            BigDecimal montoMin, BigDecimal montoMax, LocalDate cierreDesde, LocalDate cierreHasta, String palabraClave) {
+        return new FiltrosVista(ordenarPor, direccion, region, montoMin, montoMax, cierreDesde, cierreHasta, palabraClave);
     }
 
     // Busqueda en vivo contra Mercado Publico, ej:
@@ -88,9 +88,10 @@ public class CompraAgilController {
             @RequestParam(required = false) BigDecimal montoMin,
             @RequestParam(required = false) BigDecimal montoMax,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreDesde,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreHasta
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreHasta,
+            @RequestParam(required = false) String palabraClave
     ) {
-        FiltrosVista filtros = filtrosDeQuery(ordenarPor, direccion, region, montoMin, montoMax, cierreDesde, cierreHasta);
+        FiltrosVista filtros = filtrosDeQuery(ordenarPor, direccion, region, montoMin, montoMax, cierreDesde, cierreHasta, palabraClave);
         return ResponseEntity.ok(compraAgilService.listarUltimasOchoHorasCacheado(principal, authorization, pagina, tamano, filtros));
     }
 
@@ -109,9 +110,10 @@ public class CompraAgilController {
             @RequestParam(required = false) BigDecimal montoMin,
             @RequestParam(required = false) BigDecimal montoMax,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreDesde,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreHasta
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreHasta,
+            @RequestParam(required = false) String palabraClave
     ) {
-        FiltrosVista filtros = filtrosDeQuery(ordenarPor, direccion, region, montoMin, montoMax, cierreDesde, cierreHasta);
+        FiltrosVista filtros = filtrosDeQuery(ordenarPor, direccion, region, montoMin, montoMax, cierreDesde, cierreHasta, palabraClave);
         return ResponseEntity.ok(compraAgilService.listarSegundoLlamadoCacheado(principal, authorization, pagina, tamano, filtros));
     }
 
@@ -133,7 +135,7 @@ public class CompraAgilController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreDesde,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreHasta
     ) {
-        FiltrosVista filtros = filtrosDeQuery(ordenarPor, direccion, region, montoMin, montoMax, cierreDesde, cierreHasta);
+        FiltrosVista filtros = filtrosDeQuery(ordenarPor, direccion, region, montoMin, montoMax, cierreDesde, cierreHasta, null);
         return ResponseEntity.ok(compraAgilService.buscarPorTexto(q, pagina, tamano, filtros));
     }
 
@@ -156,9 +158,10 @@ public class CompraAgilController {
             @RequestParam(required = false) BigDecimal montoMin,
             @RequestParam(required = false) BigDecimal montoMax,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreDesde,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreHasta
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate cierreHasta,
+            @RequestParam(required = false) String palabraClave
     ) {
-        FiltrosVista filtros = filtrosDeQuery(ordenarPor, direccion, null, montoMin, montoMax, cierreDesde, cierreHasta);
+        FiltrosVista filtros = filtrosDeQuery(ordenarPor, direccion, null, montoMin, montoMax, cierreDesde, cierreHasta, palabraClave);
         return ResponseEntity.ok(compraAgilService.buscarPorPerfil(principal, authorization, pagina, tamano, filtros));
     }
 

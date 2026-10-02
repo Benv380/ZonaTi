@@ -42,6 +42,12 @@ public class CompraAgilDto {
     // nombre -- CompraAgilEntity.region ya lo guarda como Integer.
     // ordenarPor: "cierre" (default) | "publicacion" | "monto" | "nombre".
     // direccion: "asc" (default) | "desc".
+    // palabraClave (pedido explicito 2026-10-02, paridad con Api-Prueba):
+    // filtro libre por nombre/descripcion/organismo comprador, igual
+    // criterio que buscarPorTexto -- pensado para "Ver todo"/"Mis rubros"/
+    // "2do llamado" (busca cosas fuera del rubro configurado en el perfil
+    // de la empresa), no confundir con "q" de /buscar (esa es la barra de
+    // busqueda de arriba, un modo de vista aparte).
     public record FiltrosVista(
             String ordenarPor,
             String direccion,
@@ -49,7 +55,8 @@ public class CompraAgilDto {
             java.math.BigDecimal montoMin,
             java.math.BigDecimal montoMax,
             java.time.LocalDate cierreDesde,
-            java.time.LocalDate cierreHasta) {
+            java.time.LocalDate cierreHasta,
+            String palabraClave) {
     }
 
     // ---- Listado (payload de GET /v2/compra-agil) ----

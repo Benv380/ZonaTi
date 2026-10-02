@@ -580,6 +580,13 @@ public class CompraAgilService {
                 LocalDateTime hasta = filtros.cierreHasta().plusDays(1).atStartOfDay();
                 stream = stream.filter(c -> cierreEfectivo(c) != null && cierreEfectivo(c).isBefore(hasta));
             }
+            if (filtros.palabraClave() != null && !filtros.palabraClave().isBlank()) {
+                String texto = filtros.palabraClave().toLowerCase();
+                stream = stream.filter(c ->
+                        (c.getNombre() != null && c.getNombre().toLowerCase().contains(texto))
+                        || (c.getDescripcion() != null && c.getDescripcion().toLowerCase().contains(texto))
+                        || (c.getOrganismoComprador() != null && c.getOrganismoComprador().toLowerCase().contains(texto)));
+            }
         }
 
         Comparator<CompraAgilEntity> comparador = switch (filtros != null && filtros.ordenarPor() != null ? filtros.ordenarPor() : "cierre") {
