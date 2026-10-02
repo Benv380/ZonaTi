@@ -101,8 +101,18 @@ public interface CompraAgilRepository extends JpaRepository<CompraAgilEntity, St
     // las que cierran pronto o cerraron hace poco. Una compra que cierra
     // en 5 dias no necesita re-chequearse cada 10 minutos -- cada codigo
     // sincronizado es un llamado HTTP en vivo a Mercado Publico.
+    //
+    // "fechaSync < cierre efectivo" (2026-10-01, pedido explicito): una vez
+    // que YA conseguimos sincronizar despues de la hora de cierre, el
+    // estado quedo confirmado -- seguir reintentando todos los dias
+    // restantes de la ventana de 3 dias solo le pega de mas a una API
+    // externa que ya es lenta/inestable, sin ganar nada (no va a volver a
+    // "abrirse"). Sin esta condicion, una compra cerrada hace 2 dias se
+    // seguia reintentando en CADA ciclo de 10 min aunque el primer
+    // reintento ya hubiera confirmado el cierre.
     @Query("SELECT c.codigo FROM CompraAgilEntity c "
-            + "WHERE COALESCE(c.fechaCierreSegundoLlamado, c.fechaCierre) BETWEEN :desde AND :hasta")
+            + "WHERE COALESCE(c.fechaCierreSegundoLlamado, c.fechaCierre) BETWEEN :desde AND :hasta "
+            + "AND (c.fechaSync IS NULL OR c.fechaSync < COALESCE(c.fechaCierreSegundoLlamado, c.fechaCierre))")
     List<String> findCodigosProximosACerrar(@Param("desde") LocalDateTime desde, @Param("hasta") LocalDateTime hasta);
 
     // Usada por LimpiezaScheduler -- compras cuyo cierre real (2do llamado
