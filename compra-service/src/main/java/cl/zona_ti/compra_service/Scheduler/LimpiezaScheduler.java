@@ -1,7 +1,6 @@
 package cl.zona_ti.compra_service.Scheduler;
 
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
 
@@ -15,6 +14,7 @@ import cl.zona_ti.compra_service.Client.AsignacionInternoClient;
 import cl.zona_ti.compra_service.Repository.AdjuntoRepository;
 import cl.zona_ti.compra_service.Repository.CompraAgilRepository;
 import cl.zona_ti.compra_service.Service.SyncHealthService;
+import cl.zona_ti.compra_service.Util.FechaParser;
 
 /**
  * Purga cache vieja de Compra Agil para no crecer indefinido en disco (ver
@@ -71,7 +71,7 @@ public class LimpiezaScheduler {
             // -- aborta la limpieza de ESTE ciclo entero, a proposito (ver
             // javadoc de la clase).
             Set<String> conAsignacion = Set.copyOf(asignacionInternoClient.codigosConAsignacion("COMPRA_AGIL"));
-            LocalDateTime ahora = LocalDateTime.now(ZoneOffset.UTC);
+            LocalDateTime ahora = FechaParser.ahora();
 
             List<String> paraAdjuntos = compraAgilRepository.findCodigosCerradosAntesDe(ahora.minusDays(DIAS_BORRAR_ADJUNTOS))
                     .stream().filter(c -> !conAsignacion.contains(c)).toList();

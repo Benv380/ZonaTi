@@ -4,14 +4,15 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ForkJoinPool;
@@ -31,6 +32,8 @@ import cl.zona_ti.licitacion_service.Model.Alcance;
 import cl.zona_ti.licitacion_service.Model.LicitacionEntity;
 import cl.zona_ti.licitacion_service.Repository.LicitacionRepository;
 import cl.zona_ti.licitacion_service.Security.AuthenticatedPrincipal;
+import cl.zona_ti.licitacion_service.Util.FechaParser;
+import cl.zona_ti.licitacion_service.Util.FiltroPalabrasClave;
 
 @Service
 public class LicitacionService {
@@ -51,16 +54,31 @@ public class LicitacionService {
     // Cuanto tiempo se considera "fresca" una licitacion cacheada antes de
     // volver a pedirle el detalle a Mercado Publico. TTL propio (no el mismo
     // "ttl-minutos" que usan Compra Agil/Adjuntos) y deliberadamente MAYOR
-    // al intervalo del scheduler (LicitacionSyncScheduler, 10 min por
-    // defecto): si fueran iguales, el cache nunca llega a servir de nada --
-    // cada ciclo pedía de nuevo el detalle de las ~300-400 candidatas del
-    // día entero (8 en paralelo) apenas venciendo el TTL anterior, lo que
-    // generaba picos de CPU y presión innecesaria sobre la API externa
-    // (posible causa de bloqueos/rate-limit que afectaban también a Compra
-    // Agil). Una licitacion publicada rara vez cambia su detalle, así que
-    // un TTL más largo acá es seguro.
+    // al intervalo del scheduler (LicitacionSyncScheduler): si fueran
+    // iguales, el cache nunca llega a servir de nada -- cada ciclo pedía de
+    // nuevo el detalle de las ~300-400 candidatas del día entero apenas
+    // venciendo el TTL anterior, lo que generaba picos de CPU y presión
+    // innecesaria sobre la API externa (posible causa de bloqueos/
+    // rate-limit que afectaban también a Compra Agil). Una licitacion
+    // publicada rara vez cambia su detalle, así que un TTL más largo acá es
+    // seguro.
     @Value("${licitacion-service.cache.ttl-minutos:60}")
     private long ttlMinutos;
+
+    // Cuantos detalles se piden en paralelo durante el sync. Eran 8 fijos
+    // sobre el MISMO ticket: la API v1 rechaza peticiones simultaneas del
+    // mismo ticket, y la cuota diaria de licitaciones se agotaba (visto en
+    // vivo 2026-10-06, 429).
+    @Value("${licitacion-service.licitaciones.paralelismo-detalle:2}")
+    private int paralelismoDetalle;
+
+    // Aunque el TTL haya vencido, el detalle NO se vuelve a pedir si el
+    // listado dice que no cambio ni el estado ni la fecha de cierre (ver
+    // sinCambios), salvo que la copia tenga mas de estas horas.
+    @Value("${licitacion-service.licitaciones.horas-max-sin-refrescar:168}")
+    private long horasMaxSinRefrescar;
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(LicitacionService.class);
 
     public LicitacionService(LicitacionClient licitacionClient, LicitacionRepository licitacionRepository,
             LicitacionMapper licitacionMapper, PerfilClient perfilClient) {
@@ -76,16 +94,16 @@ public class LicitacionService {
     // solo trackea el trabajo propio ("Mis activas" en el front), no la
     // visibilidad del catalogo.
     //
-    // 100% CACHE, nunca en vivo (decision 2026-09-23: la base tiene que
-    // sostener el sistema aunque Mercado Publico este caido/lento -- antes
-    // esto le pegaba en vivo como respaldo cuando no encontraba nada
-    // cacheado, y ese respaldo era la fuente de los timeouts). El detalle
-    // completo es lo unico que se guarda en licitacionRepository (el
-    // listado por fecha, resumido, nunca se cachea -- ver comentario en
-    // getLicitacionesPorFecha), asi que estar presente ya alcanza, no hace
-    // falta chequear "frescura" aca (a diferencia de obtenerDetalleSeguro,
-    // que sigue usando estaFresca() para decidir si vale la pena pedirla
-    // de nuevo durante el sync).
+    // 100% CACHE, nunca en vivo (mismo criterio que CompraAgilService.
+    // getDetalleByCodigo, decision 2026-09-23: la base tiene que sostener
+    // el sistema aunque Mercado Publico este caido/lento -- antes esto le
+    // pegaba en vivo como respaldo cuando no encontraba nada cacheado, y
+    // ese respaldo era la fuente de los timeouts). licitacionRepository
+    // solo guarda detalle COMPLETO (el listado por fecha, resumido, nunca
+    // se cachea -- ver comentario en getLicitacionesPorFecha), asi que
+    // estar presente ya alcanza, no hace falta chequear "frescura" aca (a
+    // diferencia de obtenerDetalleSeguro, que sigue usando estaFresca()
+    // para decidir si vale la pena pedirla de nuevo durante el sync).
     public LicitacionResponse getLicitacionByCodigo(String codigo, AuthenticatedPrincipal principal, String authorizationHeader) {
         Optional<LicitacionEntity> cacheada = licitacionRepository.findByIdConItems(codigo);
         if (cacheada.isPresent()) {
@@ -166,12 +184,26 @@ public class LicitacionService {
     // controller lo llamaba directo y el front terminaba con 504 esperando).
     // Es exclusivo para que LicitacionSyncScheduler lo corra en background;
     // el usuario lee el resultado ya cacheado via listarUltimosDiasCacheado().
-    public LicitacionResponse sincronizarUltimosDias() {
-        ZonedDateTime ahora = ZonedDateTime.now(ZONA_CHILE);
-        ZonedDateTime desde = ahora.minusDays(diasListado);
+    //
+    // 2026-10-06: antes se pedian los diasListado+1 dias de listado (16
+    // llamados) en CADA ciclo. Ahora la ventana completa corre al arrancar y
+    // cada HORAS_ENTRE_VENTANAS_COMPLETAS; el resto de los ciclos pide solo
+    // ayer y hoy (los unicos dias donde aparece algo nuevo entre un ciclo y
+    // otro).
+    private static final long HORAS_ENTRE_VENTANAS_COMPLETAS = 6;
+    private volatile java.time.Instant ultimaVentanaCompleta;
 
-        List<Licitacion> candidatas = new ArrayList<>();
+    public LicitacionResponse sincronizarUltimosDias() {
+        java.time.Instant inicio = java.time.Instant.now();
+        boolean completa = ultimaVentanaCompleta == null
+                || ultimaVentanaCompleta.isBefore(inicio.minus(java.time.Duration.ofHours(HORAS_ENTRE_VENTANAS_COMPLETAS)));
+        ZonedDateTime ahora = ZonedDateTime.now(ZONA_CHILE);
+        ZonedDateTime desde = ahora.minusDays(completa ? diasListado : 1);
+
+        // LinkedHashMap: la misma licitacion puede venir en mas de un dia.
+        LinkedHashMap<String, Licitacion> candidatas = new LinkedHashMap<>();
         LicitacionResponse ultimaRespuesta = null;
+        int diasFallidos = 0;
 
         LocalDate dia = desde.toLocalDate();
         while (!dia.isAfter(ahora.toLocalDate())) {
@@ -180,33 +212,43 @@ public class LicitacionService {
                 if (respuesta != null) {
                     ultimaRespuesta = respuesta;
                     if (respuesta.listado() != null) {
-                        candidatas.addAll(respuesta.listado());
+                        for (Licitacion licitacion : respuesta.listado()) {
+                            if (licitacion.codigoExterno() != null) {
+                                candidatas.putIfAbsent(licitacion.codigoExterno(), licitacion);
+                            }
+                        }
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
                 // Si falla el listado de un dia puntual no debe tumbar el resto:
                 // se sigue con los demas dias del rango.
+                diasFallidos++;
+                log.warn("Listado de licitaciones del {} FALLÓ: {}", dia, e.getMessage());
             }
             dia = dia.plusDays(1);
         }
+        if (completa && diasFallidos == 0) {
+            ultimaVentanaCompleta = inicio;
+        }
 
-        // Se resuelve con un pool propio y acotado (no el parallelStream()
-        // directo sobre el common ForkJoinPool): un dia normal trae cientos de
-        // candidatas (ej. 376 hoy) y dispararlas todas a la vez contra la API
-        // de Mercado Publico puede gatillar rate-limiting externo. 8 en
-        // paralelo sigue siendo mucho mas rapido que secuencial sin llegar a
-        // sofocar la API externa ni el pool de conexiones a la BD.
+        // Pool propio y acotado (paralelismoDetalle, antes 8 fijos): la API
+        // v1 rechaza peticiones simultaneas del mismo ticket y comparte la
+        // cuota diaria.
+        java.util.concurrent.atomic.AtomicInteger fallidas = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger pedidas = new java.util.concurrent.atomic.AtomicInteger();
         List<Licitacion> filtradas;
-        ForkJoinPool poolAcotado = new ForkJoinPool(8);
+        ForkJoinPool poolAcotado = new ForkJoinPool(Math.max(1, paralelismoDetalle));
         try {
-            filtradas = poolAcotado.submit(() -> candidatas.parallelStream()
-                    .map(this::obtenerDetalleSeguro)
+            filtradas = poolAcotado.submit(() -> candidatas.values().parallelStream()
+                    .map(resumen -> obtenerDetalleSeguro(resumen, pedidas, fallidas))
                     .filter(Objects::nonNull)
                     .filter(lic -> estaDentroDelRango(lic, desde, ahora))
                     .toList()).join();
         } finally {
             poolAcotado.shutdown();
         }
+        log.info("Sync licitaciones ({} dia(s)): {} candidatas, {} detalles pedidos a la API, {} fallidos.",
+                completa ? diasListado + 1 : 2, candidatas.size(), pedidas.get(), fallidas.get());
 
         return new LicitacionResponse(
                 filtradas.size(),
@@ -263,14 +305,20 @@ public class LicitacionService {
         LocalDateTime desde = ZonedDateTime.now(ZONA_CHILE).minusDays(diasListado).toLocalDateTime();
         List<LicitacionEntity> cacheadas = licitacionRepository.findByFechaPublicacionDesde(desde);
 
+        // Texto normalizado una sola vez por licitacion (no una vez por filtro).
+        Map<String, String> textoPorCodigo = new HashMap<>();
+        for (LicitacionEntity licitacion : cacheadas) {
+            textoPorCodigo.put(licitacion.getCodigoExterno(), FiltroPalabrasClave.normalizar(
+                    (licitacion.getNombre() != null ? licitacion.getNombre() : "") + " "
+                            + (licitacion.getDescripcion() != null ? licitacion.getDescripcion() : "")));
+        }
+
         LinkedHashMap<String, LicitacionEntity> combinadas = new LinkedHashMap<>();
         for (PerfilBusquedaDto perfil : perfiles) {
-            if (perfil.palabrasClave() == null || perfil.palabrasClave().isBlank()) {
-                continue;
-            }
-            List<String> palabras = List.of(perfil.palabrasClave().toLowerCase().split("\\s+"));
+            List<List<String>> frases = FiltroPalabrasClave.frases(perfil.palabrasClave());
             for (LicitacionEntity licitacion : cacheadas) {
-                if (coincideConPerfil(licitacion, palabras, perfil.regionNombre())) {
+                if (coincideConPerfil(licitacion, textoPorCodigo.get(licitacion.getCodigoExterno()), frases,
+                        perfil.regionNombre())) {
                     combinadas.putIfAbsent(licitacion.getCodigoExterno(), licitacion);
                 }
             }
@@ -301,38 +349,47 @@ public class LicitacionService {
                 new Paginacion(totalPaginas, pag, tam, listado.size()));
     }
 
-    private boolean coincideConPerfil(LicitacionEntity licitacion, List<String> palabrasClave, String regionNombre) {
-        String texto = ((licitacion.getNombre() != null ? licitacion.getNombre() : "")
-                + " " + (licitacion.getDescripcion() != null ? licitacion.getDescripcion() : "")).toLowerCase();
-        boolean coincideTexto = palabrasClave.stream().anyMatch(texto::contains);
-        if (!coincideTexto) {
+    // 2026-10-06: misma regla que Compra Agil (ver FiltroPalabrasClave) --
+    // antes se separaba por palabra suelta (con la coma pegada: "electricos,"
+    // nunca coincidia) y alcanzaba con UNA palabra cualquiera ("materiales"
+    // traia de todo). Region por nombre (regionUnidad es texto libre de
+    // Mercado Publico, ej. "Región de Valparaíso"), sin tildes ni mayusculas.
+    // El front guarda el nombre con el numero romano adelante ("V -
+    // Valparaíso", ver lib/regionesComunas.js): sin sacarle ese prefijo
+    // ningun filtro con region coincidia nunca.
+    private boolean coincideConPerfil(LicitacionEntity licitacion, String textoNormalizado,
+            List<List<String>> frases, String regionNombre) {
+        if (!FiltroPalabrasClave.coincide(textoNormalizado, frases)) {
             return false;
         }
         if (regionNombre == null || regionNombre.isBlank()) {
             return true;
         }
-        String regionLicitacion = licitacion.getRegionUnidad();
-        return regionLicitacion != null && regionLicitacion.toLowerCase().contains(regionNombre.toLowerCase());
+        String regionBuscada = FiltroPalabrasClave.normalizar(regionNombre.replaceFirst("^\\s*[A-Za-z]+\\s*-\\s*", ""));
+        String regionLicitacion = FiltroPalabrasClave.normalizar(licitacion.getRegionUnidad());
+        return !regionLicitacion.isBlank() && regionLicitacion.contains(regionBuscada);
     }
 
     // Filtros/orden del panel de Licitacion.jsx (ver LicitacionDto.
-    // FiltrosVista) -- mismo criterio que CompraAgilService.aplicarFiltros
-    // (compra-service), todo en memoria sobre el universo que ya trajo la
-    // consulta base. "region" es un CONTAINS case-insensitive (no exacto):
-    // regionUnidad es texto libre de Mercado Publico, no un codigo.
+    // FiltrosVista) -- mismo criterio que CompraAgilService.aplicarFiltros,
+    // todo en memoria sobre el universo que ya trajo la consulta base.
+    // "region" es un CONTAINS case-insensitive (no exacto): regionUnidad es
+    // texto libre de Mercado Publico, no un codigo -- ver comentario del
+    // record.
     private List<LicitacionEntity> aplicarFiltros(List<LicitacionEntity> entidades, FiltrosVista filtros) {
-        LocalDateTime ahora = LocalDateTime.now(ZoneOffset.UTC);
-        // Las que ya cerraron no se muestran en las listas -- solo se ven
-        // buscando a mano por codigo (getLicitacionByCodigo no pasa por
-        // este metodo). Sin fechaCierre se deja pasar, no hay forma de
-        // saber si cerro.
+        LocalDateTime ahora = FechaParser.ahora();
+        // Las que ya cerraron no se muestran en las listas -- mismo pedido
+        // que CompraAgilService.aplicarFiltros, solo se ven buscando a mano
+        // por codigo (getLicitacionByCodigo no pasa por este metodo). Sin
+        // fechaCierre se deja pasar, no hay forma de saber si cerro.
         var stream = entidades.stream()
                 .filter(l -> l.getFechaCierre() == null || l.getFechaCierre().isAfter(ahora));
 
         if (filtros != null) {
             if (filtros.region() != null && !filtros.region().isBlank()) {
-                String regionBuscada = filtros.region().toLowerCase();
-                stream = stream.filter(l -> l.getRegionUnidad() != null && l.getRegionUnidad().toLowerCase().contains(regionBuscada));
+                String regionBuscada = FiltroPalabrasClave.normalizar(filtros.region());
+                stream = stream.filter(l -> l.getRegionUnidad() != null
+                        && FiltroPalabrasClave.normalizar(l.getRegionUnidad()).contains(regionBuscada));
             }
             if (filtros.montoMin() != null) {
                 stream = stream.filter(l -> l.getMontoEstimado() != null && l.getMontoEstimado().compareTo(filtros.montoMin()) >= 0);
@@ -375,33 +432,65 @@ public class LicitacionService {
     // usando la cache si ya la tenemos fresca en vez de volver a golpear la API.
     // Si la API falla para un codigo puntual no debe tumbar el listado completo,
     // simplemente se descarta esa licitacion.
-    private Licitacion obtenerDetalleSeguro(Licitacion resumen) {
+    //
+    // 2026-10-06: tambien se usa la cache si el listado dice que no cambio
+    // ni el estado ni la fecha de cierre (sinCambios) -- antes se volvia a
+    // pedir el detalle de TODAS las candidatas cada vez que vencia el TTL,
+    // lo que agotaba la cuota diaria. Si la API falla, se usa la copia
+    // cacheada si existe (antes se descartaba la licitacion).
+    private Licitacion obtenerDetalleSeguro(Licitacion resumen,
+            java.util.concurrent.atomic.AtomicInteger pedidas,
+            java.util.concurrent.atomic.AtomicInteger fallidas) {
         // Todo el metodo va dentro de un unico try/catch: corre en hilos del
         // ForkJoinPool (parallelStream), asi que cualquier falla puntual (DB,
         // API externa, mapeo) no debe tumbar el resto del listado.
+        Optional<LicitacionEntity> cacheada = Optional.empty();
         try {
-            Optional<LicitacionEntity> cacheada = licitacionRepository.findByIdConItems(resumen.codigoExterno());
-            if (cacheada.isPresent() && estaFresca(cacheada.get())) {
+            cacheada = licitacionRepository.findByIdConItems(resumen.codigoExterno());
+            if (cacheada.isPresent() && (estaFresca(cacheada.get()) || sinCambios(cacheada.get(), resumen))) {
                 return licitacionMapper.toDto(cacheada.get());
             }
 
+            pedidas.incrementAndGet();
             LicitacionResponse detalle = licitacionClient.getLicitacionByCodigo(resumen.codigoExterno());
             if (detalle != null && detalle.listado() != null && !detalle.listado().isEmpty()) {
                 Licitacion licitacion = detalle.listado().get(0);
                 guardarEnCache(licitacion);
                 return licitacion;
             }
-        } catch (Exception ignored) {
-            // Se descarta la candidata; no interrumpe el resto del listado.
+            fallidas.incrementAndGet();
+        } catch (Exception e) {
+            fallidas.incrementAndGet();
+            log.debug("Detalle de licitacion {} FALLÓ: {}", resumen.codigoExterno(), e.getMessage());
         }
-        return null;
+        try {
+            return cacheada.map(licitacionMapper::toDto).orElse(null);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // El listado por fecha (resumido) SI trae CodigoEstado y FechaCierre: si
+    // ninguno cambio respecto a lo cacheado, y la copia no es demasiado
+    // vieja, no hace falta pedir de nuevo el detalle completo.
+    private boolean sinCambios(LicitacionEntity entity, Licitacion resumen) {
+        LocalDateTime fechaSync = entity.getFechaSync();
+        if (fechaSync == null || fechaSync.isBefore(LocalDateTime.now().minusHours(horasMaxSinRefrescar))) {
+            return false;
+        }
+        if (resumen.codigoEstado() == null || !resumen.codigoEstado().equals(entity.getCodigoEstado())) {
+            return false;
+        }
+        LocalDateTime cierreResumen = FechaParser.parse(resumen.fechaCierre());
+        return cierreResumen == null || cierreResumen.equals(entity.getFechaCierre());
     }
 
     private void guardarEnCache(Licitacion licitacion) {
         try {
             licitacionRepository.save(licitacionMapper.toEntity(licitacion, LocalDateTime.now()));
-        } catch (Exception ignored) {
-            // Un fallo al escribir en la cache no debe tumbar la respuesta al usuario.
+        } catch (Exception e) {
+            // Un fallo al escribir en la cache no tumba el sync, pero queda en el log.
+            log.warn("No se pudo cachear la licitacion {}: {}", licitacion.codigoExterno(), e.getMessage());
         }
     }
 
@@ -433,7 +522,9 @@ public class LicitacionService {
             return null;
         }
         try {
-            return OffsetDateTime.parse(fecha).atZoneSameInstant(ZONA_CHILE);
+            // Misma convencion que FechaParser: la hora escrita es la de Chile,
+            // aunque venga con "Z".
+            return OffsetDateTime.parse(fecha).toLocalDateTime().atZone(ZONA_CHILE);
         } catch (DateTimeParseException ignored) {
         }
         for (DateTimeFormatter formato : FORMATOS_FECHA_HORA) {

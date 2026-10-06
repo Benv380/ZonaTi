@@ -66,6 +66,10 @@ services:
       - DB_PASSWORD=postgres
       - JWT_SECRET=${AUTH_JWT_SECRET}
       - AUTH_SERVICE_URL=http://auth-service:8081
+      # Ver MERCADO_PUBLICO_TICKET en .env -- CompraAgilClient/AdjuntoClient
+      # no arrancan sin esto.
+      - MERCADO_PUBLICO_TICKET=${MERCADO_PUBLICO_TICKET}
+      - MERCADO_PUBLICO_ADJUNTOS_USER_KEY=${MERCADO_PUBLICO_ADJUNTOS_USER_KEY}
     restart: unless-stopped
 
   licitacion-service:
@@ -78,6 +82,8 @@ services:
       - DB_PASSWORD=postgres
       - JWT_SECRET=${AUTH_JWT_SECRET}
       - AUTH_SERVICE_URL=http://auth-service:8081
+      # Mismo ticket que compra-service -- ver LicitacionClient.
+      - MERCADO_PUBLICO_TICKET=${MERCADO_PUBLICO_TICKET}
       # "scraper-service" se resuelve solo por DNS interno de Docker
       # Compose, sin IP hardcodeada. Este servicio (Java) no necesita saber
       # nada de Tailscale/Chromium -- eso es asunto de scraper-service.

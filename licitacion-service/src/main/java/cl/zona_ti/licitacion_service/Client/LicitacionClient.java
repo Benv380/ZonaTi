@@ -18,6 +18,9 @@ public class LicitacionClient {
     public LicitacionClient(
             @Value("${mercado-publico.licitacion.url}") String baseUrl,
             @Value("${mercado-publico.licitacion.ticket}") String ticket) {
+        if (ticket == null || ticket.isBlank()) {
+            throw new IllegalStateException("Falta MERCADO_PUBLICO_TICKET (ticket de la API de Mercado Publico) en el entorno.");
+        }
         this.ticket = ticket;
         // Mismo motivo que CompraAgilClient: sin request factory propia,
         // esto no tiene timeout por defecto y puede colgarse para siempre

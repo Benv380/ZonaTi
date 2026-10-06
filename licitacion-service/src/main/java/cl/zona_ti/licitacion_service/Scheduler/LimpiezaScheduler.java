@@ -1,7 +1,6 @@
 package cl.zona_ti.licitacion_service.Scheduler;
 
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
 
@@ -15,6 +14,7 @@ import cl.zona_ti.licitacion_service.Client.AsignacionInternoClient;
 import cl.zona_ti.licitacion_service.Repository.AdjuntoLicitacionRepository;
 import cl.zona_ti.licitacion_service.Repository.LicitacionRepository;
 import cl.zona_ti.licitacion_service.Service.SyncHealthService;
+import cl.zona_ti.licitacion_service.Util.FechaParser;
 
 /**
  * Purga cache vieja de Licitacion para no crecer indefinido en disco (ver
@@ -71,7 +71,7 @@ public class LimpiezaScheduler {
             // -- aborta la limpieza de ESTE ciclo entero, a proposito (ver
             // javadoc de la clase).
             Set<String> conAsignacion = Set.copyOf(asignacionInternoClient.codigosConAsignacion("LICITACION"));
-            LocalDateTime ahora = LocalDateTime.now(ZoneOffset.UTC);
+            LocalDateTime ahora = FechaParser.ahora();
 
             List<String> paraAdjuntos = licitacionRepository.findCodigosCerradosAntesDe(ahora.minusDays(DIAS_BORRAR_ADJUNTOS))
                     .stream().filter(c -> !conAsignacion.contains(c)).toList();

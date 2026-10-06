@@ -12,6 +12,8 @@ import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 
@@ -41,6 +43,8 @@ import cl.zona_ti.compra_service.Model.CompraAgilProveedorCotizandoEntity;
 import cl.zona_ti.compra_service.Repository.CompraAgilProveedorCotizandoRepository;
 import cl.zona_ti.compra_service.Repository.CompraAgilRepository;
 import cl.zona_ti.compra_service.Security.AuthenticatedPrincipal;
+import cl.zona_ti.compra_service.Util.FechaParser;
+import cl.zona_ti.compra_service.Util.FiltroPalabrasClave;
 
 @Service
 public class CompraAgilService {
@@ -53,6 +57,15 @@ public class CompraAgilService {
     private final CompraAgilMapper compraAgilMapper;
     private final PerfilClient perfilClient;
     private final ReclamosClient reclamosClient;
+    // Leer + modificar + guardar una CompraAgilEntity tiene que pasar en UNA
+    // sola transaccion: fuera de ella (hilos del scheduler, sin
+    // open-in-view) findById() devuelve la entidad ya desconectada de la
+    // sesion, y el mapper revienta con LazyInitializationException al tocar
+    // sus colecciones LAZY (documentos/productos/proveedores). Ese error se
+    // tragaba en silencio: las compras YA cacheadas nunca se actualizaban
+    // (ni el detalle completo, ni los cambios de estado) -- solo se
+    // guardaban bien la primera vez, cuando todavia no existian.
+    private final TransactionTemplate transactionTemplate;
 
     // Tamaño de pagina por defecto para /listar -- ver
     // listarUltimasOchoHorasCacheado().
@@ -60,13 +73,15 @@ public class CompraAgilService {
 
     public CompraAgilService(CompraAgilClient compraAgilClient, CompraAgilRepository compraAgilRepository,
             CompraAgilProveedorCotizandoRepository compraAgilProveedorCotizandoRepository,
-            CompraAgilMapper compraAgilMapper, PerfilClient perfilClient, ReclamosClient reclamosClient) {
+            CompraAgilMapper compraAgilMapper, PerfilClient perfilClient, ReclamosClient reclamosClient,
+            PlatformTransactionManager transactionManager) {
         this.compraAgilClient = compraAgilClient;
         this.compraAgilRepository = compraAgilRepository;
         this.compraAgilProveedorCotizandoRepository = compraAgilProveedorCotizandoRepository;
         this.compraAgilMapper = compraAgilMapper;
         this.perfilClient = perfilClient;
         this.reclamosClient = reclamosClient;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     // Interno/de confianza -- los "filtros" ya vienen resueltos (por el
@@ -141,16 +156,36 @@ public class CompraAgilService {
             return new CompraAgilListadoResponse("true", null, new Listado(List.of(), new Paginacion(1, 1, 0, 0)), null);
         }
 
-        // LinkedHashMap para deduplicar por codigo sin perder del todo el
-        // orden (cada sub-busqueda ya viene ordenada por fecha_publicacion
-        // desc; se reordena igual abajo, o segun "filtros" si se pidio un
-        // orden distinto -- ver aplicarFiltros()).
+        // 2026-10-06: antes se mandaba el texto ENTERO de palabras clave como
+        // un unico LIKE '%...%' (comas incluidas, distinguiendo tildes): con
+        // "materiales electricos, cemento" no encontraba practicamente nada.
+        // Ahora: universo = compras abiertas en cache (las cerradas igual se
+        // esconden en aplicarFiltros), y cada filtro se evalua con
+        // FiltroPalabrasClave (frases separadas por coma, todas las palabras
+        // de la frase, sin tildes ni plural) + region por codigo.
+        LocalDateTime ahora = FechaParser.ahora();
+        List<CompraAgilEntity> abiertas = compraAgilRepository.findAbiertas(ahora, ahora.minusHours(48));
+
+        // Texto normalizado una sola vez por compra (no una vez por filtro).
+        Map<String, String> textoPorCodigo = new HashMap<>();
+        for (CompraAgilEntity compra : abiertas) {
+            textoPorCodigo.put(compra.getCodigo(), FiltroPalabrasClave.normalizar(
+                    (compra.getNombre() != null ? compra.getNombre() : "") + " "
+                            + (compra.getDescripcion() != null ? compra.getDescripcion() : "")));
+        }
+
+        // LinkedHashMap: union de todos los filtros sin repetir compras, en
+        // el orden de la consulta (fecha de publicacion desc; aplicarFiltros
+        // reordena despues segun lo que pida el panel).
         LinkedHashMap<String, CompraAgilEntity> combinadas = new LinkedHashMap<>();
         for (PerfilBusquedaDto perfil : perfiles) {
-            String texto = perfil.palabrasClave() != null ? perfil.palabrasClave() : "";
+            List<List<String>> frases = FiltroPalabrasClave.frases(perfil.palabrasClave());
             Integer region = parseRegion(perfil.regionCodigo());
-            for (CompraAgilEntity entidad : compraAgilRepository.buscarPorTextoYRegion(texto, region)) {
-                combinadas.putIfAbsent(entidad.getCodigo(), entidad);
+            for (CompraAgilEntity compra : abiertas) {
+                if ((region == null || region.equals(compra.getRegion()))
+                        && FiltroPalabrasClave.coincide(textoPorCodigo.get(compra.getCodigo()), frases)) {
+                    combinadas.putIfAbsent(compra.getCodigo(), compra);
+                }
             }
         }
         return paginarCacheado(List.copyOf(combinadas.values()), pagina, tamano, filtros);
@@ -372,12 +407,31 @@ public class CompraAgilService {
     // pega en vivo a Mercado Publico para el detalle, es literalmente lo
     // que alimenta la cache. No confundir con getDetalleByCodigo() de
     // abajo (esa es 100% cache, la usa el usuario).
+    //
+    // Lanza excepcion si la API no responde success="OK" con payload (ver
+    // doc, seccion 7: en error responde success="NOK", payload=null, y el
+    // RestClient no lanza nada por status) o si no se pudo guardar en cache
+    // -- antes ambos casos retornaban "normal" y el scheduler los contaba
+    // como EXITO, con el panel de monitoreo en verde mientras fallaba.
     public CompraAgilDetalleResponse sincronizarDetalle(String codigo) {
         CompraAgilDetalleResponse respuesta = compraAgilClient.getDetalleByCodigo(codigo);
-        if (respuesta != null && respuesta.payload() != null) {
-            guardarDetalleEnCache(respuesta.payload());
+        if (respuesta == null || !"OK".equalsIgnoreCase(respuesta.success()) || respuesta.payload() == null) {
+            throw new IllegalStateException("Detalle de " + codigo + " no OK: "
+                    + describirError(respuesta == null ? null : respuesta.success(),
+                            respuesta == null ? null : respuesta.errors()));
         }
+        guardarDetalleEnCache(respuesta.payload());
         return respuesta;
+    }
+
+    private static String describirError(String success, List<CompraAgilError> errores) {
+        if (errores != null && !errores.isEmpty()) {
+            return errores.stream()
+                    .map(err -> (err.codigo() != null ? err.codigo() + " " : "") + (err.mensaje() != null ? err.mensaje() : ""))
+                    .reduce((a, b) -> a + "; " + b)
+                    .orElse("success=" + success);
+        }
+        return "success=" + success;
     }
 
     // Busqueda por codigo puntual -- ya no se acota por asignaciones (ver
@@ -420,7 +474,7 @@ public class CompraAgilService {
 
         return new CompraAgilDetalleResponse("false", null, null, List.of(
                 new CompraAgilError("cache-pendiente",
-                        "Todavía no se sincronizó esta compra ágil. El sistema la sincroniza automáticamente cada 10 minutos, inténtelo nuevamente en unos minutos.",
+                        "Todavía no se sincronizó esta compra ágil. El sistema la sincroniza automáticamente cada hora, inténtelo nuevamente más tarde.",
                         null)));
     }
 
@@ -433,7 +487,7 @@ public class CompraAgilService {
         if (entradaNormalizada.isBlank()) {
             return null;
         }
-        LocalDateTime desde = LocalDateTime.now(ZoneOffset.UTC).minusHours(48);
+        LocalDateTime desde = FechaParser.ahora().minusHours(48);
         return compraAgilRepository.findByFechaPublicacionDesde(desde).stream()
                 .map(CompraAgilEntity::getCodigo)
                 .filter(codigoCacheado -> normalizarParaComparar(codigoCacheado).equals(entradaNormalizada))
@@ -447,20 +501,167 @@ public class CompraAgilService {
     // listarUltimasOchoHorasCacheado() (mismo fix que se hizo para
     // licitaciones: no llamar esto desde un endpoint que responde a un
     // request, corre el riesgo de tardar mas que el timeout del proxy).
-    public CompraAgilListadoResponse sincronizarUltimasOchoHoras() {
-        OffsetDateTime hasta = OffsetDateTime.now(ZoneOffset.UTC);
-        OffsetDateTime desde = hasta.minusHours(48);
+    //
+    // 2026-10-06: antes pedia UNA sola pagina sin tamano_pagina (la API
+    // devuelve 15 por defecto) -- de los cientos de compras publicadas en
+    // 48h solo entraban 15 por ciclo, el resto nunca se cacheaba. Ahora,
+    // pensado para gastar lo minimo de cuota en llamados redundantes:
+    //   - recorre TODAS las paginas, con la misma consulta por fecha de
+    //     publicacion que ya funcionaba;
+    //   - ventana INCREMENTAL: cada ciclo pide solo desde donde termino el
+    //     ultimo listado completo que salio bien (ultimoListadoHasta), con
+    //     MINUTOS_SOLAPE de margen por si Mercado Publico publica con algo de
+    //     atraso. Con un ciclo por hora son ~2h de listado. Si un ciclo
+    //     falla, la marca no avanza y el siguiente cubre el hueco solo;
+    //   - ventana COMPLETA (48h) solo al arrancar y cada
+    //     HORAS_ENTRE_VENTANAS_COMPLETAS: re-lee compras mas viejas para
+    //     detectar cambios (cancelada, desierta...) en las que siguen
+    //     abiertas;
+    //   - devuelve SOLO los codigos que necesitan pedir el detalle (nuevos,
+    //     sin detalle completo, o que cambiaron segun fecha_ultimo_cambio,
+    //     ver guardarItemEnCache) -- las que ya estaban y no cambiaron no
+    //     gastan un llamado de detalle. En la BD no se duplica nada: la
+    //     fila se identifica por el codigo de la compra.
+    private static final long HORAS_VENTANA_COMPLETA = 48;
+    private static final long HORAS_ENTRE_VENTANAS_COMPLETAS = 24;
+    private static final long MINUTOS_SOLAPE = 60;
+    // "Hasta" del ultimo listado que se leyo completo y bien, en hora de
+    // Chile (en memoria: al reiniciar se arranca con la ventana completa).
+    //
+    // Por que hora de Chile: Mercado Publico guarda y devuelve sus fechas en
+    // hora de Chile aunque les ponga "Z" (ver FechaParser), y lo mas
+    // probable es que tambien compare publicado_desde/hasta asi. El "desde"
+    // se arma con la hora de Chile (+"Z") y el "hasta" con la hora UTC real
+    // (que es mas tarde): si la API los toma como hora de Chile la ventana
+    // es exacta, y si los toma como UTC real queda ~3h mas ancha (relee
+    // algo de mas, pero no se pierde nada). Con un "desde" en UTC, y la API
+    // comparando en hora de Chile, se habrian salteado las ultimas ~3h.
+    private volatile LocalDateTime ultimoListadoHasta;
+    private static final DateTimeFormatter FORMATO_PARAM_API = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'");
+    // Paginas de 15 (el tamano por defecto de la API). Bug real 2026-10-06:
+    // con tamano_pagina=50 la API tardaba mas de ~29s y el gateway delante
+    // de ella cortaba con una respuesta sin "success" (success=null), tanto
+    // en el listado como en tramos chicos de 6h; con 10/15 por pagina (lo
+    // que usaba la version que funcionaba, y un curl manual) responde bien.
+    private static final String TAMANO_PAGINA_LISTADO = "15";
+    // Tope de seguridad (48h rara vez pasa de ~100 paginas de 15).
+    private static final int MAX_PAGINAS_LISTADO = 200;
+    private volatile java.time.Instant ultimaVentanaCompleta;
 
-        Map<String, String> filtros = Map.of(
-                "publicado_desde", desde.format(DateTimeFormatter.ISO_INSTANT),
-                "publicado_hasta", hasta.format(DateTimeFormatter.ISO_INSTANT));
+    public List<String> sincronizarPublicadasRecientes() {
+        java.time.Instant inicio = java.time.Instant.now();
+        LocalDateTime ahoraChile = FechaParser.ahora().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+        LocalDateTime topeInferior = ahoraChile.minusHours(HORAS_VENTANA_COMPLETA);
 
-        // Reusa listar(): ademas de pedir el rango, deja cacheado cada item.
-        return listar(filtros);
+        boolean completa = ultimaVentanaCompleta == null
+                || ultimaVentanaCompleta.isBefore(inicio.minus(java.time.Duration.ofHours(HORAS_ENTRE_VENTANAS_COMPLETAS)));
+        if (completa) {
+            try {
+                return listarVentana(topeInferior, ahoraChile, true, inicio);
+            } catch (RuntimeException e) {
+                // Si ni la primera pagina de 48h sale, al menos que entre lo
+                // reciente en este ciclo; la ventana completa se reintenta en
+                // el proximo.
+                log.warn("Listado compra agil (48h) fallo: {} -- se intenta solo con lo reciente.", e.getMessage());
+            }
+        }
+
+        LocalDateTime desde = ultimoListadoHasta != null
+                ? ultimoListadoHasta.minusMinutes(MINUTOS_SOLAPE)
+                : ahoraChile.minusMinutes(2 * MINUTOS_SOLAPE);
+        if (desde.isBefore(topeInferior)) {
+            desde = topeInferior;
+        }
+        return listarVentana(desde, ahoraChile, false, inicio);
+    }
+
+    // desde/hastaChile en hora de Chile (ver ultimoListadoHasta).
+    private List<String> listarVentana(LocalDateTime desde, LocalDateTime hastaChile, boolean completa,
+            java.time.Instant inicio) {
+        long minutos = java.time.Duration.between(desde, hastaChile).toMinutes();
+
+        Map<String, String> filtrosBase = new HashMap<>();
+        filtrosBase.put("publicado_desde", desde.format(FORMATO_PARAM_API));
+        // "hasta" con la hora UTC real (mas tarde que la de Chile): cubre
+        // las 2 formas en que la API pueda interpretar el parametro.
+        filtrosBase.put("publicado_hasta", OffsetDateTime.now(ZoneOffset.UTC)
+                .truncatedTo(java.time.temporal.ChronoUnit.SECONDS).format(DateTimeFormatter.ISO_INSTANT));
+        filtrosBase.put("tamano_pagina", TAMANO_PAGINA_LISTADO);
+
+        java.util.LinkedHashSet<String> necesitanDetalle = new java.util.LinkedHashSet<>();
+        int vistas = 0;
+        int pagina = 1;
+        int totalPaginas = 1;
+        boolean todasLasPaginas = true;
+        do {
+            Map<String, String> filtros = new HashMap<>(filtrosBase);
+            filtros.put("numero_pagina", String.valueOf(pagina));
+            CompraAgilClient.RespuestaListado respuesta = listarPaginaConReintento(filtros, pagina);
+            if (!respuesta.esOk()) {
+                if (pagina == 1) {
+                    throw new IllegalStateException("Listado compra agil no OK: " + respuesta.describir());
+                }
+                // Lo de las paginas anteriores ya quedo cacheado: se usa igual.
+                log.warn("Listado compra agil: pagina {} de {} no OK ({}) -- se sigue con lo ya leido.",
+                        pagina, totalPaginas, respuesta.describir());
+                todasLasPaginas = false;
+                break;
+            }
+            CompraAgilListadoResponse cuerpo = respuesta.cuerpo();
+            if (cuerpo.payload() == null || cuerpo.payload().items() == null) {
+                break;
+            }
+            for (Item item : cuerpo.payload().items()) {
+                vistas++;
+                if (guardarItemEnCache(item)) {
+                    necesitanDetalle.add(item.codigo());
+                }
+            }
+            Paginacion paginacion = cuerpo.payload().paginacion();
+            totalPaginas = paginacion != null && paginacion.total_paginas() != null ? paginacion.total_paginas() : 1;
+            pagina++;
+        } while (pagina <= totalPaginas && pagina <= MAX_PAGINAS_LISTADO);
+
+        // La marca solo avanza si se leyeron TODAS las paginas: si quedo algo
+        // a medias, el proximo ciclo vuelve a cubrir esta ventana.
+        if (todasLasPaginas) {
+            ultimoListadoHasta = hastaChile;
+            if (completa) {
+                ultimaVentanaCompleta = inicio;
+            }
+        }
+        log.info("Listado compra agil ({}, {}h{}m): {} compras en {} pagina(s), {} necesitan detalle.",
+                completa ? "completo" : "incremental", minutos / 60, minutos % 60,
+                vistas, pagina - 1, necesitanDetalle.size());
+        return new java.util.ArrayList<>(necesitanDetalle);
+    }
+
+    // Un corte puntual (timeout/gateway: sin envelope, o error de red) se
+    // reintenta UNA vez tras una pausa corta. Un NOK de la API (400, 429...)
+    // no: volveria a fallar igual y gastaria cuota.
+    private CompraAgilClient.RespuestaListado listarPaginaConReintento(Map<String, String> filtros, int pagina) {
+        CompraAgilClient.RespuestaListado respuesta;
+        try {
+            respuesta = compraAgilClient.listarConEstado(filtros);
+            boolean esNokDeLaApi = respuesta.cuerpo() != null && respuesta.cuerpo().success() != null;
+            if (respuesta.esOk() || esNokDeLaApi) {
+                return respuesta;
+            }
+            log.warn("Listado compra agil: pagina {} sin respuesta valida ({}) -- se reintenta una vez.",
+                    pagina, respuesta.describir());
+        } catch (org.springframework.web.client.ResourceAccessException e) {
+            log.warn("Listado compra agil: pagina {} {} -- se reintenta una vez.", pagina, e.getMessage());
+        }
+        try {
+            Thread.sleep(5000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return compraAgilClient.listarConEstado(filtros);
     }
 
     // Uso EXCLUSIVO de CompraAgilSyncScheduler -- complementa
-    // sincronizarUltimasOchoHoras() de arriba (que solo trae compras
+    // sincronizarPublicadasRecientes() de arriba (que solo trae compras
     // publicadas en las ultimas 48h). Una compra con un cierre lejano (2do
     // llamado, plazos largos) sale de esa ventana de publicacion mucho
     // antes de cerrar de verdad, y sin esto quedaba con su estado/fecha de
@@ -468,13 +669,19 @@ public class CompraAgilService {
     // CompraAgilRepository.findCodigosProximosACerrar) para no multiplicar
     // llamados en vivo a Mercado Publico re-chequeando compras que igual
     // van a seguir abiertas por dias.
-    private static final long DIAS_ATRAS_RESYNC = 3;
-    private static final long HORAS_ADELANTE_RESYNC = 24;
+    //
+    // 2026-10-06: ahora solo las que YA pasaron su hora de cierre en las
+    // ultimas HORAS_ATRAS_RESYNC y siguen "publicada" en cache (ver
+    // CompraAgilRepository.findCodigosProximosACerrar) -- antes se
+    // re-pedian ~400 detalles en cada ciclo. "ahora" en hora de Chile: las
+    // fechas de cierre de Mercado Publico se guardan con la hora de Chile
+    // tal cual vienen (ver FechaParser), y el contenedor corre en UTC.
+    private static final long HORAS_ATRAS_RESYNC = 12;
 
     public List<String> codigosProximosACerrar() {
-        LocalDateTime ahora = LocalDateTime.now();
+        LocalDateTime ahoraChile = FechaParser.ahora();
         return compraAgilRepository.findCodigosProximosACerrar(
-                ahora.minusDays(DIAS_ATRAS_RESYNC), ahora.plusHours(HORAS_ADELANTE_RESYNC));
+                ahoraChile.minusHours(HORAS_ATRAS_RESYNC), ahoraChile);
     }
 
     // Uso EXCLUSIVO del panel de monitoreo (ver SyncController.salud()).
@@ -509,7 +716,7 @@ public class CompraAgilService {
     // devuelve Mercado Publico para la busqueda en vivo (Puerta 2), asi
     // el front trata ambas respuestas igual.
     public CompraAgilListadoResponse listarUltimasOchoHorasCacheado(AuthenticatedPrincipal principal, String authorizationHeader, int pagina, int tamano, FiltrosVista filtros) {
-        LocalDateTime desde = LocalDateTime.now(ZoneOffset.UTC).minusHours(48);
+        LocalDateTime desde = FechaParser.ahora().minusHours(48);
         return paginarCacheado(compraAgilRepository.findByFechaPublicacionDesde(desde), pagina, tamano, filtros);
     }
 
@@ -519,8 +726,8 @@ public class CompraAgilService {
     // "En 2do llamado" en CompraRapida.jsx. Mismo criterio de lectura
     // directa del cache, sin pegarle en vivo a la API externa.
     public CompraAgilListadoResponse listarSegundoLlamadoCacheado(AuthenticatedPrincipal principal, String authorizationHeader, int pagina, int tamano, FiltrosVista filtros) {
-        LocalDateTime desde = LocalDateTime.now(ZoneOffset.UTC).minusHours(48);
-        LocalDateTime ahora = LocalDateTime.now(ZoneOffset.UTC);
+        LocalDateTime desde = FechaParser.ahora().minusHours(48);
+        LocalDateTime ahora = FechaParser.ahora();
         return paginarCacheado(compraAgilRepository.findEnSegundoLlamadoDesde(desde, ahora), pagina, tamano, filtros);
     }
 
@@ -553,7 +760,7 @@ public class CompraAgilService {
     // universo que llega acá ya viene acotado por su propia consulta (48h
     // de publicacion, o el perfil de la empresa), nunca es "toda la tabla".
     private List<CompraAgilEntity> aplicarFiltros(List<CompraAgilEntity> entidades, FiltrosVista filtros) {
-        LocalDateTime ahora = LocalDateTime.now(ZoneOffset.UTC);
+        LocalDateTime ahora = FechaParser.ahora();
         // Las que ya cerraron no se muestran en las listas -- pedido
         // explicito 2026-09-30: solo se ven si se buscan a mano por codigo
         // (getDetalleByCodigo NO pasa por este metodo). Sin cierreEfectivo
@@ -619,20 +826,48 @@ public class CompraAgilService {
                 new Listado(pagina_, new Paginacion(totalPaginas, pag, tam, items.size())), null);
     }
 
-    private void guardarItemEnCache(Item item) {
+    // findById + merge + save dentro de UNA transaccion (ver comentario de
+    // transactionTemplate). Un item que falla no tumba el resto del listado,
+    // pero ahora queda en el log en vez de tragarse en silencio.
+    //
+    // Devuelve true si a esta compra le hace falta pedir el detalle: es
+    // nueva, todavia no tiene el detalle completo, o su fecha_ultimo_cambio
+    // cambio respecto a lo que habia en cache (se compara ANTES de pisarla
+    // con la del listado).
+    private boolean guardarItemEnCache(Item item) {
+        if (item == null || item.codigo() == null || item.codigo().isBlank()) {
+            return false;
+        }
         try {
-            CompraAgilEntity existente = compraAgilRepository.findById(item.codigo()).orElse(null);
-            compraAgilRepository.save(compraAgilMapper.mergeFromItem(existente, item, LocalDateTime.now()));
-        } catch (Exception ignored) {
-            // Un fallo al escribir en la cache no debe tumbar la respuesta al usuario.
+            Boolean necesitaDetalle = transactionTemplate.execute(estado -> {
+                CompraAgilEntity existente = compraAgilRepository.findById(item.codigo()).orElse(null);
+                boolean necesita = existente == null
+                        || !Boolean.TRUE.equals(existente.getDetalleCompleto())
+                        || cambioDesdeUltimoSync(existente, item);
+                compraAgilRepository.save(compraAgilMapper.mergeFromItem(existente, item, LocalDateTime.now()));
+                return necesita;
+            });
+            return !Boolean.FALSE.equals(necesitaDetalle);
+        } catch (Exception e) {
+            log.warn("No se pudo cachear el item {} del listado de compra agil: {}", item.codigo(), e.getMessage(), e);
+            // Se intenta igual el detalle: si sale bien, crea/actualiza la fila.
+            return true;
         }
     }
 
+    private static boolean cambioDesdeUltimoSync(CompraAgilEntity existente, Item item) {
+        LocalDateTime cambioListado = item.fechas() != null
+                ? FechaParser.parse(item.fechas().fecha_ultimo_cambio())
+                : null;
+        return cambioListado != null && !cambioListado.equals(existente.getFechaUltimoCambio());
+    }
+
+    // A diferencia de guardarItemEnCache, aca el error SI se propaga: el
+    // scheduler tiene que contarlo como fallo del detalle.
     private void guardarDetalleEnCache(Detalle detalle) {
-        try {
+        transactionTemplate.executeWithoutResult(estado -> {
             CompraAgilEntity existente = compraAgilRepository.findById(detalle.codigo()).orElse(null);
             compraAgilRepository.save(compraAgilMapper.toEntity(detalle, existente, LocalDateTime.now()));
-        } catch (Exception ignored) {
-        }
+        });
     }
 }

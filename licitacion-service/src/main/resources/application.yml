@@ -29,15 +29,23 @@ spring:
     init:
       mode: always
       continue-on-error: false
+  task:
+    scheduling:
+      pool:
+        # Por defecto Spring usa UN solo hilo para todos los @Scheduled --
+        # con eso, el sync de licitaciones y el de limpieza se turnaban en
+        # serie, atrasandose entre si.
+        size: 4
 
 licitacion-service:
   cache:
     # Minutos que se considera "fresca" una licitacion cacheada antes de
     # volver a pedir su detalle a Mercado Publico. Tiene que ser MAYOR al
-    # intervalo de LicitacionSyncScheduler (licitacion-service.sync.fixed-
-    # delay, 10 min por defecto) para que el scheduler no vuelva a pedir el
-    # detalle completo de todas las candidatas del dia en cada ciclo (eso
-    # generaba picos de CPU y presion sobre la API externa).
+    # intervalo de LicitacionSyncScheduler para que el scheduler no vuelva a
+    # pedir el detalle completo de todas las candidatas del dia en cada
+    # ciclo (eso generaba picos de CPU y presion sobre la API externa).
+    # Aunque venza, el detalle no se re-pide si el listado dice que no
+    # cambio (ver licitaciones.horas-max-sin-refrescar).
     ttl-minutos: 60
   # Cuantos dias hacia atras se trae en GET /compra/licitacion/listar (y lo
   # que usa LicitacionSyncScheduler para descubrir candidatas): todo lo
@@ -46,12 +54,27 @@ licitacion-service:
   # despues el detalle de cada candidata nueva (se cachea con
   # cache.ttl-minutos, asi que los ciclos siguientes son livianos).
   dias-listado: 15
+  licitaciones:
+    # Cuantos detalles de licitacion se piden en paralelo (eran 8 fijos, y
+    # la API v1 rechaza peticiones simultaneas del mismo ticket).
+    paralelismo-detalle: 2
+    # Aunque venza cache.ttl-minutos, el detalle no se vuelve a pedir si el
+    # listado dice que no cambio ni el estado ni la fecha de cierre, salvo
+    # que la copia cacheada tenga mas de estas horas.
+    horas-max-sin-refrescar: 168
   sync:
-    # Cada cuanto corre LicitacionSyncScheduler en horario diurno (formato
-    # ISO-8601 Duration). En horario nocturno (00:00-06:59) se espacia
-    # solo a cada 2h, sin tocar esta propiedad -- ver
-    # MINUTOS_CICLO_NOCTURNO en LicitacionSyncScheduler.
-    fixed-delay: PT20M
+    # Cuando corre la sincronizacion de adjuntos (cron de Spring: seg min
+    # hora dia mes dia-semana), en HORA DE CHILE. Cada hora a los :30 (media
+    # hora corrido respecto de Compra Agil en compra-service, para no
+    # pegarle a todo al mismo tiempo). Ademas corre una vez al arrancar el
+    # servicio (60s despues), asi un deploy no deja esperando hasta la
+    # proxima hora. Antes: cada 20 min (fixed-delay) con un "horario
+    # nocturno" que, al usar la hora UTC del contenedor, caia de 21:00 a
+    # 04:00 en Chile.
+    cron: "0 30 * * * *"
+    # Interruptor de emergencia: en "false" frena TODA sincronizacion en
+    # vivo contra Mercado Publico sin tocar codigo. Default true.
+    habilitado: true
 
 jwt:
   # TIENE que ser exactamente el mismo secreto que usa auth-service (ver su
@@ -90,9 +113,13 @@ scraper-service:
   timeout-seconds: 120
 
 mercado-publico:
+  # Ticket sale del entorno (.env de la maquina, ver docker-compose.yml),
+  # igual que JWT_SECRET -- antes estaba escrito aca, versionado en git.
+  # Sin default a proposito: si falta, el servicio no arranca (ver
+  # LicitacionClient) en vez de llamar a la API con un ticket vacio.
   licitacion:
     url: https://api.mercadopublico.cl/servicios/v1/publico
-    ticket: A84949FD-A50D-40C4-A3D2-83791DFA28A3
+    ticket: ${MERCADO_PUBLICO_TICKET:}
 
 logging:
   level:

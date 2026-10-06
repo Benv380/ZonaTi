@@ -32,24 +32,31 @@ spring:
     init:
       mode: always
       continue-on-error: false
+  task:
+    scheduling:
+      pool:
+        # Por defecto Spring usa UN solo hilo para todos los @Scheduled --
+        # con eso, el sync de Compra Agil, el refresco del ping en vivo y el
+        # scraper de reclamos se turnaban en serie, atrasandose entre si.
+        size: 4
 
 compra-service:
   cache:
-    # Minutos que se considera "fresca" una fila cacheada (compras agiles,
-    # adjuntos de compra agil) antes de volver a pedirla a Mercado Publico.
-    # Tiene que ser MAYOR al intervalo de CompraAgilSyncScheduler
-    # (compra-service.sync.fixed-delay, 20 min por defecto) -- con el TTL
-    # igual al intervalo el detalle quedaba "vencido" justo antes de
-    # cada ciclo, asi que abrir el detalle desde "Mostrar todo" terminaba
-    # pegandole en vivo a Mercado Publico (hasta 20s de espera) en vez de
-    # servir el cache que todavia era valido.
+    # (Compra Agil ya no usa un TTL: el detalle se vuelve a pedir solo si la
+    # compra es nueva o cambio, ver CompraAgilService.guardarItemEnCache.)
     ttl-minutos: 25
   sync:
-    # Cada cuanto corre CompraAgilSyncScheduler en horario diurno (formato
-    # ISO-8601 Duration). En horario nocturno (00:00-06:59) se espacia
-    # solo a cada 2h, sin tocar esta propiedad -- ver
-    # MINUTOS_CICLO_NOCTURNO en CompraAgilSyncScheduler.
-    fixed-delay: PT20M
+    # Cuando corre la sincronizacion (cron de Spring: seg min hora dia mes
+    # dia-semana), en HORA DE CHILE. Cada hora en punto. Ademas corre una
+    # vez al arrancar el servicio (30s despues), asi un deploy no deja
+    # esperando hasta la proxima hora. Antes: cada 20 min (fixed-delay) con
+    # un "horario nocturno" que, al usar la hora UTC del contenedor, caia
+    # de 21:00 a 04:00 en Chile.
+    cron-compra-agil: "0 0 * * * *"
+    # Interruptor de emergencia: en "false" frena TODA sincronizacion en
+    # vivo contra Mercado Publico sin tocar codigo -- en docker-compose
+    # sale de SYNC_HABILITADO en el .env. Default true.
+    habilitado: true
   python:
     # Comando que lanza scripts/obtener_token_reclamos.py (Playwright),
     # separado por comas -- cada elemento es un argv, en orden, ANTES del
@@ -98,12 +105,17 @@ internal:
   service-key: ${INTERNAL_SERVICE_KEY}
 
 mercado-publico:
+  # Ticket y user-key salen del entorno (.env de la maquina, ver
+  # docker-compose.yml), igual que JWT_SECRET -- antes estaban escritos aca,
+  # versionados en git. Sin default a proposito: si faltan, el servicio no
+  # arranca (ver CompraAgilClient/AdjuntoClient) en vez de llamar a la API
+  # con un ticket vacio.
   compra-agil:
     url: https://api2.mercadopublico.cl
-    ticket: A84949FD-A50D-40C4-A3D2-83791DFA28A3
+    ticket: ${MERCADO_PUBLICO_TICKET:}
   adjuntos:
     url: https://adjunto.mercadopublico.cl/adjunto-compra-agil
-    user-key: 41186b85826e80d1a0d445a6ce67d1a3
+    user-key: ${MERCADO_PUBLICO_ADJUNTOS_USER_KEY:}
   auth:
     url: https://servicios-prd.mercadopublico.cl
   comprador:

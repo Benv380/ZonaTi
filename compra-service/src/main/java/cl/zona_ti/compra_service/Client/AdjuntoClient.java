@@ -26,6 +26,9 @@ public class AdjuntoClient {
             @Value("${mercado-publico.adjuntos.url}") String baseUrl,
             @Value("${mercado-publico.adjuntos.user-key}") String userKey,
             TokenCacheService tokenCacheService) {
+        if (userKey == null || userKey.isBlank()) {
+            throw new IllegalStateException("Falta MERCADO_PUBLICO_ADJUNTOS_USER_KEY (user-key de adjunto.mercadopublico.cl) en el entorno.");
+        }
         this.userKey = userKey;
         this.tokenCacheService = tokenCacheService;
 

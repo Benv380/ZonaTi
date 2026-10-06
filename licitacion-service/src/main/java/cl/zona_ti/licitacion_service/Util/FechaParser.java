@@ -2,7 +2,7 @@ package cl.zona_ti.licitacion_service.Util;
 
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.List;
@@ -13,7 +13,17 @@ import java.util.List;
 // zona. Este parser se usa en los mappers para guardar todo como
 // LocalDateTime (hora local, sin zona) al cachear, sin reventar el guardado
 // completo si un campo puntual viene en un formato inesperado.
+//
+// Bug real 2026-09-30: las fechas que manda Mercado Publico, aunque algunas
+// traigan "Z" (UTC), en realidad son hora de CHILE tal cual -- confirmado
+// comparando fecha_cierre con fecha_cierre_primer_llamado del mismo instante
+// (una con "Z", otra sin zona, mismo valor de reloj) y contra la hora real al
+// momento del request. Convertir esa "Z" a UTC real corria el reloj guardado
+// ~3-4h hacia adelante. Ahora: SIEMPRE se guarda tal cual la escribe Mercado
+// Publico, descartando cualquier offset/zona que traiga.
 public final class FechaParser {
+
+    public static final ZoneId ZONA_MERCADO_PUBLICO = ZoneId.of("America/Santiago");
 
     private static final List<DateTimeFormatter> FORMATOS_SIN_ZONA = List.of(
             DateTimeFormatter.ISO_LOCAL_DATE_TIME,
@@ -33,7 +43,9 @@ public final class FechaParser {
             return null;
         }
         try {
-            return OffsetDateTime.parse(fecha).atZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+            // Se descarta el offset/zona a proposito (ver comentario de
+            // arriba) -- el valor de reloj que trae es hora de Chile.
+            return OffsetDateTime.parse(fecha).toLocalDateTime();
         } catch (DateTimeParseException ignored) {
         }
         for (DateTimeFormatter formato : FORMATOS_SIN_ZONA) {
@@ -45,16 +57,19 @@ public final class FechaParser {
         return null;
     }
 
-    // Las LocalDateTime que maneja este parser SIEMPRE representan un
-    // instante UTC (ver parse() arriba, que normaliza todo a ZoneOffset.UTC
-    // antes de guardar) -- pero LocalDateTime no lleva marca de zona, asi
-    // que formatear sin mas perdia esa "Z" en el JSON de salida. Bug real
-    // detectado 2026-09-30 (Api-Prueba): un ISO-8601 SIN zona lo interpreta
-    // el navegador como hora LOCAL, no UTC -- new Date() en Chile corria el
-    // reloj ~3-4h hacia adelante, mostrando "Cierra en Xh" en licitaciones
-    // que ya habian cerrado hace rato. Con el "Z" explicito, new Date() en
-    // el navegador lo interpreta como UTC.
+    // Hora actual en Chile -- usar SIEMPRE esto (no LocalDateTime.now()) para
+    // comparar contra fechas parseadas con este mismo parser: el contenedor
+    // corre en UTC, y comparar esas fechas (hora de Chile) contra la hora UTC
+    // del contenedor desalineaba cualquier filtro/ventana por varias horas.
+    public static LocalDateTime ahora() {
+        return LocalDateTime.now(ZONA_MERCADO_PUBLICO);
+    }
+
+    // Le adjunta el offset REAL de Chile (-03:00 o -04:00 segun horario de
+    // verano), no un "Z" falso -- lo que se guarda ya es hora de Chile (ver
+    // parse() arriba), no UTC.
     public static String format(LocalDateTime fecha) {
-        return fecha == null ? null : fecha.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + "Z";
+        return fecha == null ? null
+                : fecha.atZone(ZONA_MERCADO_PUBLICO).toOffsetDateTime().format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
     }
 }

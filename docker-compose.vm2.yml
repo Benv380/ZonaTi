@@ -96,6 +96,10 @@ services:
       # ReclamosTokenScheduler/application.yml en compra-service). Un
       # scraper Playwright lo renueva solo cada 6hs.
       - MERCADO_PUBLICO_RUT_REFERENCIA=${MERCADO_PUBLICO_RUT_REFERENCIA:-}
+      # Ticket/user-key de Mercado Publico -- ver CompraAgilClient/
+      # AdjuntoClient, y el mismo comentario en vm2.env.example.
+      - MERCADO_PUBLICO_TICKET=${MERCADO_PUBLICO_TICKET}
+      - MERCADO_PUBLICO_ADJUNTOS_USER_KEY=${MERCADO_PUBLICO_ADJUNTOS_USER_KEY}
     depends_on:
       - postgres
     restart: unless-stopped
@@ -112,6 +116,9 @@ services:
       - AUTH_SERVICE_URL=http://auth-service:8081
       - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY}
       - SCRAPER_SERVICE_URL=http://scraper-service:8090
+      # Mismo ticket que compra-service (ver MERCADO_PUBLICO_TICKET arriba)
+      # -- ver LicitacionClient.
+      - MERCADO_PUBLICO_TICKET=${MERCADO_PUBLICO_TICKET}
     depends_on:
       - scraper-service
       - postgres

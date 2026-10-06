@@ -17,11 +17,17 @@ import org.springframework.web.client.RestClient;
 
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilDetalleResponse;
 import cl.zona_ti.compra_service.Dto.CompraAgilDto.CompraAgilListadoResponse;
+import cl.zona_ti.compra_service.Util.JsonTolerante;
+import tools.jackson.databind.ObjectMapper;
 
 @Component
 public class CompraAgilClient {
 
-    private final RestClient restClient;
+    // Listado y detalle (los usa el scheduler en background, y el listado
+    // tambien la busqueda en vivo de GLOBAL) -- ver timeouts en el
+    // constructor.
+    private final RestClient syncClient;
+    private final ObjectMapper jsonTolerante = JsonTolerante.crear();
     // Cliente aparte, con timeout corto, exclusivo para el chequeo "en
     // vivo" del panel de monitoreo (ver SyncController.salud()) -- ese
     // panel se auto-refresca cada pocos segundos, y esperar hasta 20s por
@@ -32,6 +38,9 @@ public class CompraAgilClient {
     public CompraAgilClient(
             @Value("${mercado-publico.compra-agil.url}") String baseUrl,
             @Value("${mercado-publico.compra-agil.ticket}") String ticket) {
+        if (ticket == null || ticket.isBlank()) {
+            throw new IllegalStateException("Falta MERCADO_PUBLICO_TICKET (ticket de la API de Mercado Publico) en el entorno.");
+        }
         // Sin esto, una request colgada del lado de Mercado Publico se
         // queda esperando PARA SIEMPRE (RestClient sin request factory
         // propia no tiene timeout por defecto). Es lo que causaba el
@@ -44,13 +53,17 @@ public class CompraAgilClient {
         // (a diferencia de los clientes internos entre microservicios,
         // que usan 3s/5s) porque esto es una API externa de terceros,
         // puede tardar de verdad.
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofSeconds(5));
-        requestFactory.setReadTimeout(Duration.ofSeconds(20));
-
-        this.restClient = RestClient.builder()
+        //
+        // Lectura de 45s (antes 20s): visto en vivo 2026-10-06, el detalle
+        // de una compra tardaba mas de 20s en responder ("Read timed out")
+        // en varias compras seguidas, y el listado ahora pide paginas de 50.
+        // Corre en background (scheduler), no hay un usuario esperando.
+        SimpleClientHttpRequestFactory syncRequestFactory = new SimpleClientHttpRequestFactory();
+        syncRequestFactory.setConnectTimeout(Duration.ofSeconds(5));
+        syncRequestFactory.setReadTimeout(Duration.ofSeconds(45));
+        this.syncClient = RestClient.builder()
                 .baseUrl(baseUrl)
-                .requestFactory(requestFactory)
+                .requestFactory(syncRequestFactory)
                 .defaultHeader("ticket", ticket)
                 // La API responde el envelope {success, trace, payload, errors} incluso
                 // en 4xx/429 (ver seccion 7 de la doc), asi que no debe lanzar excepcion
@@ -75,21 +88,96 @@ public class CompraAgilClient {
     // cambio_desde, cambio_hasta, publicado_desde, publicado_hasta, estado, region,
     // id, q, tamano_pagina, numero_pagina, ordenar_por.
     public CompraAgilListadoResponse listar(Map<String, String> filtros) {
-        return restClient.get()
+        return listarConEstado(filtros).cuerpo();
+    }
+
+    // Respuesta del listado + status HTTP + texto crudo. Bug real
+    // 2026-10-06: el sync fallaba con "success=null" -- la respuesta no traia
+    // el envelope documentado {success, payload, errors} (cortes del gateway
+    // delante de la API a los ~29s), y sin status ni body no habia forma de
+    // saber que habia respondido. "cuerpo" queda null si el body no se puede
+    // leer como el envelope.
+    public record RespuestaListado(int status, CompraAgilListadoResponse cuerpo, String crudo) {
+
+        public boolean esOk() {
+            return cuerpo != null && "OK".equalsIgnoreCase(cuerpo.success());
+        }
+
+        // "HTTP 504: {"message":"Endpoint request timed out"}" o, si es el
+        // envelope de la API, sus errores.
+        public String describir() {
+            if (cuerpo != null && cuerpo.success() != null) {
+                String errores = cuerpo.errors() == null ? "" : cuerpo.errors().stream()
+                        .map(err -> (err.codigo() != null ? err.codigo() + " " : "") + (err.mensaje() != null ? err.mensaje() : ""))
+                        .reduce((a, b) -> a + "; " + b)
+                        .orElse("");
+                return "HTTP " + status + ", success=" + cuerpo.success() + (errores.isBlank() ? "" : ": " + errores);
+            }
+            return "HTTP " + status + ": " + recortar(crudo);
+        }
+    }
+
+    public RespuestaListado listarConEstado(Map<String, String> filtros) {
+        ResponseEntity<String> respuesta = syncClient.get()
                 .uri(uriBuilder -> {
                     uriBuilder.path("/v2/compra-agil");
                     filtros.forEach(uriBuilder::queryParam);
                     return uriBuilder.build();
                 })
                 .retrieve()
-                .body(CompraAgilListadoResponse.class);
+                .toEntity(String.class);
+        String crudo = respuesta.getBody();
+        CompraAgilListadoResponse cuerpo = null;
+        if (crudo != null && !crudo.isBlank()) {
+            try {
+                cuerpo = jsonTolerante.readValue(crudo, CompraAgilListadoResponse.class);
+            } catch (Exception e) {
+                cuerpo = null;
+            }
+        }
+        return new RespuestaListado(respuesta.getStatusCode().value(), cuerpo, crudo);
     }
 
+    private static String recortar(String texto) {
+        if (texto == null || texto.isBlank()) {
+            return "(body vacio)";
+        }
+        String limpio = texto.replaceAll("\\s+", " ").trim();
+        return limpio.length() <= 300 ? limpio : limpio.substring(0, 300) + "...";
+    }
+
+    // Se lee como texto y se parsea con JsonTolerante (no con el conversor
+    // por defecto): bug real 2026-10-06, algunas compras traen en el detalle
+    // un campo con un tipo distinto al documentado y el conversor estricto
+    // descartaba el detalle COMPLETO ("Error while extracting response for
+    // type CompraAgilDetalleResponse"). Si igual no se puede leer, el error
+    // incluye el status HTTP y el motivo exacto de Jackson (con la ruta del
+    // campo), no solo "Error while extracting response".
     public CompraAgilDetalleResponse getDetalleByCodigo(String codigo) {
-        return restClient.get()
+        ResponseEntity<String> respuesta = syncClient.get()
                 .uri("/v2/compra-agil/{codigo}", codigo)
                 .retrieve()
-                .body(CompraAgilDetalleResponse.class);
+                .toEntity(String.class);
+        String crudo = respuesta.getBody();
+        if (crudo == null || crudo.isBlank()) {
+            throw new IllegalStateException("Detalle de " + codigo + ": body vacio (HTTP "
+                    + respuesta.getStatusCode().value() + ")");
+        }
+        CompraAgilDetalleResponse detalle;
+        try {
+            detalle = jsonTolerante.readValue(crudo, CompraAgilDetalleResponse.class);
+        } catch (Exception e) {
+            throw new IllegalStateException("Detalle de " + codigo + " ilegible (HTTP "
+                    + respuesta.getStatusCode().value() + "): " + e.getMessage()
+                    + " | body: " + recortar(crudo), e);
+        }
+        // Sin "success" = no es el envelope de la API (ej. el gateway cortando
+        // a los ~29s con {"message": "..."}): se informa tal cual llego.
+        if (detalle == null || detalle.success() == null) {
+            throw new IllegalStateException("Detalle de " + codigo + ": respuesta inesperada (HTTP "
+                    + respuesta.getStatusCode().value() + "): " + recortar(crudo));
+        }
+        return detalle;
     }
 
     public record EstadoApiEnVivo(boolean disponible, long latenciaMs, String error) {
@@ -124,7 +212,10 @@ public class CompraAgilClient {
                 // 2026-10-02: la cuota diaria se agoto de verdad). El
                 // status (ej. 429) ya es mucho mas util para diagnosticar.
                 ResponseEntity<CompraAgilListadoResponse> respuesta = pingClient.get()
-                        .uri(uriBuilder -> uriBuilder.path("/v2/compra-agil").queryParam("tamano_pagina", "1").build())
+                        // tamano_pagina entre 10 y 50: con 1 la API responde
+                        // "Parametros de consulta invalidos" y el panel
+                        // mostraba la API caida aunque estuviera respondiendo.
+                        .uri(uriBuilder -> uriBuilder.path("/v2/compra-agil").queryParam("tamano_pagina", "10").build())
                         .retrieve()
                         .toEntity(CompraAgilListadoResponse.class);
                 long latencia = System.currentTimeMillis() - inicio;

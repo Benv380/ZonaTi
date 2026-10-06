@@ -79,6 +79,20 @@ public interface CompraAgilRepository extends JpaRepository<CompraAgilEntity, St
             + "ORDER BY c.fechaPublicacion DESC")
     List<CompraAgilEntity> buscarPorTextoYRegion(@Param("texto") String texto, @Param("region") Integer region);
 
+    // "Mis rubros" en Compra Agil (ver CompraAgilService.buscarPorPerfil):
+    // las compras que siguen ABIERTAS (cierre real -- 2do llamado si hay, si
+    // no el normal -- en el futuro), sin importar cuando se publicaron. Las
+    // que no tienen ninguna fecha de cierre cacheada se incluyen solo si se
+    // publicaron hace poco ("desde"). Las palabras clave/region de cada
+    // filtro se evaluan despues en Java (ver FiltroPalabrasClave): un LIKE
+    // no sabe separar frases por coma ni ignorar tildes/plural. "ahora" y
+    // "desde" en hora de Chile (ver FechaParser).
+    @Query("SELECT DISTINCT c FROM CompraAgilEntity c LEFT JOIN FETCH c.documentos "
+            + "WHERE COALESCE(c.fechaCierreSegundoLlamado, c.fechaCierre) > :ahora "
+            + "OR (c.fechaCierre IS NULL AND c.fechaCierreSegundoLlamado IS NULL AND c.fechaPublicacion >= :desde) "
+            + "ORDER BY c.fechaPublicacion DESC")
+    List<CompraAgilEntity> findAbiertas(@Param("ahora") LocalDateTime ahora, @Param("desde") LocalDateTime desde);
+
     // Panel "perfil del comprador" (ver CompraAgilService.perfilComprador):
     // TODO lo cacheado de un mismo organismo, sin filtro de fecha -- a
     // diferencia de las de arriba, este panel es historico a proposito (que
@@ -88,31 +102,33 @@ public interface CompraAgilRepository extends JpaRepository<CompraAgilEntity, St
     List<CompraAgilEntity> findByRutInstitucion(String rutInstitucion);
 
     // Usada por CompraAgilSyncScheduler para re-sincronizar compras que ya
-    // cacheamos pero que el listado de "ultimas 8 horas" (ver
-    // findByFechaPublicacionDesde/CompraAgilService.sincronizarUltimasOchoHoras)
-    // dejo de traer -- ese listado se filtra por fecha de PUBLICACION, asi
-    // que una compra con un cierre lejano (2do llamado, plazos largos)
-    // deja de actualizarse ni bien pasan 8h desde que se publico, aunque
-    // siga abierta. Bug real detectado 2026-09-30: el estado/fecha de
-    // cierre quedaba congelado con el ultimo valor sincronizado, sin
-    // reflejar que Mercado Publico ya la habia cerrado.
+    // cacheamos pero que el listado de "publicadas recientemente" (ver
+    // CompraAgilService.sincronizarPublicadasRecientes) dejo de traer --
+    // ese listado se filtra por fecha de PUBLICACION, asi que una compra
+    // con un cierre lejano (2do llamado, plazos largos) deja de
+    // actualizarse ni bien sale de esa ventana, aunque siga abierta. Bug
+    // real detectado 2026-09-30: el estado/fecha de cierre quedaba
+    // congelado con el ultimo valor sincronizado, sin reflejar que Mercado
+    // Publico ya la habia cerrado.
     //
     // Ventana acotada a proposito (no "todo lo que sigue abierto"): solo
     // las que cierran pronto o cerraron hace poco. Una compra que cierra
-    // en 5 dias no necesita re-chequearse cada 10 minutos -- cada codigo
+    // en 5 dias no necesita re-chequearse en cada ciclo -- cada codigo
     // sincronizado es un llamado HTTP en vivo a Mercado Publico.
     //
-    // "fechaSync < cierre efectivo" (2026-10-01, pedido explicito): una vez
-    // que YA conseguimos sincronizar despues de la hora de cierre, el
-    // estado quedo confirmado -- seguir reintentando todos los dias
-    // restantes de la ventana de 3 dias solo le pega de mas a una API
-    // externa que ya es lenta/inestable, sin ganar nada (no va a volver a
-    // "abrirse"). Sin esta condicion, una compra cerrada hace 2 dias se
-    // seguia reintentando en CADA ciclo de 10 min aunque el primer
-    // reintento ya hubiera confirmado el cierre.
+    // 2026-10-06: la condicion "fechaSync < cierre" seguia incluyendo, en
+    // CADA ciclo, a todas las compras que cierran en las proximas 24h
+    // (fechaSync de hoy siempre es menor a un cierre futuro) -- ~400
+    // detalles por ciclo, ~25.000 llamados/dia contra la cuota del ticket.
+    // Ahora: solo las que YA pasaron su hora de cierre (dentro de la
+    // ventana) y que en nuestra cache siguen figurando "publicada". Apenas
+    // una sincronizacion trae el estado nuevo (cerrada, desierta, etc.),
+    // dejan de salir aca. Comparar contra el estado (y no contra fechaSync)
+    // ademas evita mezclar zonas horarias: fechaSync se guarda con la hora
+    // del servidor y las fechas de cierre con la hora de Chile.
     @Query("SELECT c.codigo FROM CompraAgilEntity c "
             + "WHERE COALESCE(c.fechaCierreSegundoLlamado, c.fechaCierre) BETWEEN :desde AND :hasta "
-            + "AND (c.fechaSync IS NULL OR c.fechaSync < COALESCE(c.fechaCierreSegundoLlamado, c.fechaCierre))")
+            + "AND (c.estadoCodigo IS NULL OR LOWER(c.estadoCodigo) = 'publicada')")
     List<String> findCodigosProximosACerrar(@Param("desde") LocalDateTime desde, @Param("hasta") LocalDateTime hasta);
 
     // Usada por LimpiezaScheduler -- compras cuyo cierre real (2do llamado

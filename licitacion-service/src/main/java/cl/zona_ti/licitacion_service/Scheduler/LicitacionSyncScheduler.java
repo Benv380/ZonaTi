@@ -1,6 +1,6 @@
 package cl.zona_ti.licitacion_service.Scheduler;
 
-import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -8,9 +8,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -25,7 +30,8 @@ import cl.zona_ti.licitacion_service.Service.SyncHealthService;
 import jakarta.annotation.PreDestroy;
 
 /**
- * Cada X minutos (licitacion-service.sync.fixed-delay):
+ * Cada hora a los :30, hora de Chile (licitacion-service.sync.cron), y una
+ * vez al arrancar:
  *  1) Pide a LicitacionService las licitaciones recientes -- mismo método
  *     que ya usa el frontend (GET /compra/licitacion/listar), que a su vez
  *     consulta la API pública de Mercado Público y guarda cada licitación
@@ -43,6 +49,10 @@ import jakarta.annotation.PreDestroy;
  * Si no hay nada pendiente, el ciclo no le pega a scraper-service para
  * nada -- el costo caro (levantar Chromium) solo se paga cuando realmente
  * hace falta.
+ *
+ * Paridad con Api-Prueba: alla el mismo patron de cron + ReentrantLock +
+ * primera corrida al arrancar vive en el mismo scheduler que Compra Agil
+ * (un solo servicio) -- aca cada microservicio tiene su propia copia.
  */
 @Component
 public class LicitacionSyncScheduler {
@@ -53,42 +63,75 @@ public class LicitacionSyncScheduler {
 
     public static final String JOB_ADJUNTOS = "licitacion-adjuntos";
 
-    // Mismo criterio que CompraAgilSyncScheduler (pedido explicito
-    // 2026-10-02, paridad con Api-Prueba): tope de 2 intentos por codigo
-    // antes de dejar de reintentar, y sincronizacion mas espaciada en
-    // horario nocturno.
+    // Mismo criterio que CompraAgilSyncScheduler (compra-service), pedido
+    // explicito 2026-10-02: tope de 2 intentos por codigo antes de dejar de
+    // reintentar.
     private static final int MAX_INTENTOS_FALLO = 2;
-    private static final int HORA_FIN_NOCTURNO = 7;
-    private static final long MINUTOS_CICLO_NOCTURNO = 120;
     private final Map<String, Integer> fallosAdjuntos = new ConcurrentHashMap<>();
-    private volatile LocalDateTime ultimaEjecucion;
+
+    // Un solo ciclo a la vez (cron, arranque y sync manual), mismo criterio
+    // que CompraAgilSyncScheduler.
+    private final ReentrantLock cicloEnCurso = new ReentrantLock();
+    // Despues que la primera corrida de Compra Agil (30s, en compra-service),
+    // para no arrancar las 2 al mismo tiempo.
+    private static final long SEGUNDOS_TRAS_ARRANQUE = 60;
+
+    // Interruptor de emergencia, mismo criterio que compra-service.
+    @Value("${licitacion-service.sync.habilitado:true}")
+    private boolean syncHabilitado;
 
     private final LicitacionAttachmentScraperClient scraper;
     private final AdjuntoLicitacionRepository repository;
     private final LicitacionService licitacionService;
     private final SyncHealthService syncHealthService;
+    private final TaskScheduler taskScheduler;
     private final ExecutorService pool = Executors.newFixedThreadPool(POOL_SIZE);
 
     public LicitacionSyncScheduler(LicitacionAttachmentScraperClient scraper,
                                     AdjuntoLicitacionRepository repository,
                                     LicitacionService licitacionService,
-                                    SyncHealthService syncHealthService) {
+                                    SyncHealthService syncHealthService,
+                                    TaskScheduler taskScheduler) {
         this.scraper = scraper;
         this.repository = repository;
         this.licitacionService = licitacionService;
         this.syncHealthService = syncHealthService;
+        this.taskScheduler = taskScheduler;
     }
 
-    @Scheduled(fixedDelayString = "${licitacion-service.sync.fixed-delay:PT20M}")
+    // Cada hora a los :30, en hora de Chile (configurable con
+    // licitacion-service.sync.cron) -- media hora corrido respecto de
+    // Compra Agil (:00, en compra-service) para repartir la carga. Antes:
+    // cada 20 min con un "horario nocturno" calculado con la hora UTC del
+    // contenedor.
+    @Scheduled(cron = "${licitacion-service.sync.cron:0 30 * * * *}", zone = "America/Santiago")
+    public void sincronizarProgramado() {
+        sincronizarAdjuntos();
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void programarPrimeraCorrida() {
+        taskScheduler.schedule(this::sincronizarAdjuntos, Instant.now().plusSeconds(SEGUNDOS_TRAS_ARRANQUE));
+    }
+
+    // Publico: tambien lo dispara SyncController (sync manual).
     public void sincronizarAdjuntos() {
-        LocalDateTime ahora = LocalDateTime.now();
-        if (ahora.getHour() < HORA_FIN_NOCTURNO
-                && ultimaEjecucion != null
-                && Duration.between(ultimaEjecucion, ahora).toMinutes() < MINUTOS_CICLO_NOCTURNO) {
+        if (!syncHabilitado) {
+            log.debug("Sync licitaciones: deshabilitado (licitacion-service.sync.habilitado=false).");
             return;
         }
-        ultimaEjecucion = ahora;
+        if (!cicloEnCurso.tryLock()) {
+            log.info("Sync licitaciones: ya hay un ciclo en curso, se salta este.");
+            return;
+        }
+        try {
+            ejecutarCiclo();
+        } finally {
+            cicloEnCurso.unlock();
+        }
+    }
 
+    private void ejecutarCiclo() {
         List<String> codigosDelPeriodo = obtenerCodigosLicitacionesRecientes();
         syncHealthService.iniciarCiclo(JOB_ADJUNTOS);
         if (codigosDelPeriodo.isEmpty()) {
