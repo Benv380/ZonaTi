@@ -24,6 +24,7 @@ import cl.zona_ti.auth_service.Dto.AsignacionEmpresaResumen;
 import cl.zona_ti.auth_service.Dto.AsignacionGlobalResponse;
 import cl.zona_ti.auth_service.Dto.AsignacionResponse;
 import cl.zona_ti.auth_service.Dto.CrearAsignacionRequest;
+import cl.zona_ti.auth_service.Dto.PrepararEnvioResponse;
 import cl.zona_ti.auth_service.Model.EstadoAsignacion;
 import cl.zona_ti.auth_service.Model.TipoAsignacion;
 import cl.zona_ti.auth_service.Security.AuthenticatedPrincipal;
@@ -244,6 +245,32 @@ public class AsignacionController {
             @AuthenticationPrincipal AuthenticatedPrincipal actor
     ) {
         return ResponseEntity.ok(asignacionService.marcarEnviada(id, actor));
+    }
+
+    // Le entrega a la extension de navegador la cotizacion lista para enviar a
+    // Mercado Publico (reemplaza al flujo de Power Automate Desktop). GLOBAL/
+    // EMPRESA, mismo criterio que marcarEnviada -- enviar es accion de nivel
+    // aprobacion. El service valida que la fila este realmente lista (ver
+    // AsignacionService.prepararEnvio). Tras enviar OK, la extension cierra el
+    // circuito con PATCH .../enviada (marcarEnviada).
+    // Pantalla "Enviar a Mercado Público" -- lista las compras ágiles listas
+    // para enviar (COMPLETADO, aprobadas, con cotización, no enviadas
+    // todavía). GLOBAL ve todas las empresas, EMPRESA solo la suya.
+    @GetMapping("/auth/asignaciones/listas-para-enviar")
+    @PreAuthorize("hasAnyRole('GLOBAL','EMPRESA')")
+    public ResponseEntity<List<AsignacionGlobalResponse>> listasParaEnviar(
+            @AuthenticationPrincipal AuthenticatedPrincipal actor
+    ) {
+        return ResponseEntity.ok(asignacionService.listasParaEnviar(actor));
+    }
+
+    @GetMapping("/auth/asignaciones/{id}/preparar-envio")
+    @PreAuthorize("hasAnyRole('GLOBAL','EMPRESA')")
+    public ResponseEntity<PrepararEnvioResponse> prepararEnvio(
+            @PathVariable Long id,
+            @AuthenticationPrincipal AuthenticatedPrincipal actor
+    ) {
+        return ResponseEntity.ok(asignacionService.prepararEnvio(id, actor));
     }
 
     @DeleteMapping("/auth/asignaciones/{id}")

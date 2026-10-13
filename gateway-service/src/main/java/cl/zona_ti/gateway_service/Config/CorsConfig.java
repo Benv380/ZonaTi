@@ -24,7 +24,25 @@ public class CorsConfig {
         config.addAllowedMethod("*");
         config.addAllowedHeader("*");
 
+        // La extension de navegador "ZonaTi - Mercado Publico" (envio de
+        // cotizaciones, ver Api-Prueba/extension) llama desde
+        // "chrome-extension://<id>": se permite SOLO en las rutas que usa
+        // (preparar-envio/enviada/documentos de una asignacion, y la descarga
+        // de cada documento). Patron y no un id fijo porque el id cambia
+        // segun como se cargue la extension. Se registra ANTES de "/**":
+        // gana la primera ruta que coincide.
+        // auth-service no tiene CORS propio a proposito: el gateway le cambia
+        // el Host al reenviar, y con CORS alla las peticiones normales de la
+        // pagina se verian como de otro sitio (403 "Invalid CORS request").
+        CorsConfiguration extension = new CorsConfiguration();
+        extension.addAllowedOrigin("http://localhost:5173");
+        extension.addAllowedOriginPattern("chrome-extension://*");
+        extension.addAllowedMethod("*");
+        extension.addAllowedHeader("*");
+
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/auth/asignaciones/**", extension);
+        source.registerCorsConfiguration("/auth/documentos/**", extension);
         source.registerCorsConfiguration("/**", config);
         return new CorsWebFilter(source);
     }

@@ -100,4 +100,21 @@ public interface AsignacionRepository extends JpaRepository<Asignacion, Long> {
     // DESCARTADO) para considerar que "alguien la miro".
     @Query("SELECT DISTINCT a.codigoExterno FROM Asignacion a WHERE a.tipo = :tipo")
     List<String> findCodigosConAsignacion(@Param("tipo") TipoAsignacion tipo);
+
+    // Pantalla "Enviar a Mercado Público" (ver AsignacionService.
+    // listasParaEnviar) -- exactamente las mismas condiciones que exige
+    // AsignacionService.prepararEnvio antes de entregarle la cotizacion a
+    // la extension: COMPLETADO, aprobada (pendienteRevision=false), con
+    // cotizacion cargada, y todavia no enviada. "empresaId" opcional (null
+    // = GLOBAL, ve de todas las empresas; con valor = acotado a esa
+    // empresa, mismo patron que buscarPaginado).
+    @Query("SELECT a FROM Asignacion a WHERE "
+            + "a.tipo = cl.zona_ti.auth_service.Model.TipoAsignacion.COMPRA_AGIL "
+            + "AND a.estado = cl.zona_ti.auth_service.Model.EstadoAsignacion.COMPLETADO "
+            + "AND a.pendienteRevision = false "
+            + "AND a.enviadoMercadoPublico = false "
+            + "AND a.cotizacionJson IS NOT NULL "
+            + "AND (:empresaId IS NULL OR a.usuario.empresa.id = :empresaId) "
+            + "ORDER BY a.creadoEn DESC")
+    List<Asignacion> findListasParaEnviar(@Param("empresaId") Long empresaId);
 }

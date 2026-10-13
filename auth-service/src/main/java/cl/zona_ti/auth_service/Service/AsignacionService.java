@@ -12,11 +12,13 @@ import cl.zona_ti.auth_service.Dto.ActualizarCotizacionRequest;
 import cl.zona_ti.auth_service.Dto.AsignacionEmpresaResumen;
 import cl.zona_ti.auth_service.Dto.ActualizarDetalleDesarrolloRequest;
 import cl.zona_ti.auth_service.Dto.ActualizarEstadoRequest;
+import cl.zona_ti.auth_service.Dto.PrepararEnvioResponse;
 import cl.zona_ti.auth_service.Dto.AsignacionGlobalResponse;
 import cl.zona_ti.auth_service.Dto.AsignacionResponse;
 import cl.zona_ti.auth_service.Dto.CrearAsignacionRequest;
 import cl.zona_ti.auth_service.Model.Alcance;
 import cl.zona_ti.auth_service.Model.Asignacion;
+import cl.zona_ti.auth_service.Model.Empresa;
 import cl.zona_ti.auth_service.Model.EstadoAsignacion;
 import cl.zona_ti.auth_service.Model.OrigenAsignacion;
 import cl.zona_ti.auth_service.Model.TipoAsignacion;
@@ -221,6 +223,16 @@ public class AsignacionService {
                 .toList();
     }
 
+    // Pantalla "Enviar a Mercado Público" (reemplaza Power Automate Desktop,
+    // ver prepararEnvio) -- GLOBAL ve de todas las empresas, EMPRESA solo
+    // las suyas (mismo criterio de alcance que el resto del service).
+    public List<AsignacionGlobalResponse> listasParaEnviar(AuthenticatedPrincipal actor) {
+        Long empresaId = actor.alcance() == Alcance.GLOBAL ? null : actor.empresaId();
+        return asignacionRepository.findListasParaEnviar(empresaId).stream()
+                .map(this::toResponseGlobal)
+                .toList();
+    }
+
     // Uso EXCLUSIVO de InternalController (ver
     // AsignacionRepository.findCodigosConAsignacion para el detalle de por
     // que es GLOBAL/sin filtro).
@@ -295,6 +307,55 @@ public class AsignacionService {
         verificarPermiso(asignacion.getUsuario(), actor);
         asignacion.setEnviadoMercadoPublico(true);
         return toResponse(asignacionRepository.save(asignacion));
+    }
+
+    // Arma el paquete que la extension de navegador necesita para enviar una
+    // cotizacion a Mercado Publico. Reemplaza al flujo de Power Automate
+    // Desktop: en vez de que un RPA externo tome la fila y la cargue solo, la
+    // extension corre en el navegador del usuario (con su sesion de MP) y hace
+    // el envio -- este metodo es el que le entrega QUE enviar.
+    //
+    // Mismo criterio de permiso que marcarEnviada (verificarPermiso =
+    // GLOBAL/EMPRESA): enviar es una accion de nivel aprobacion, no la dispara
+    // el dueño de la fila. Y valida EXACTAMENTE las mismas condiciones que
+    // tomaba Power Automate antes de enviar, para no mandar algo a medio hacer
+    // ni reenviar lo ya enviado: una Compra Agil COMPLETADA, ya aprobada (no
+    // pendiente de revision), todavia no enviada, y con su cotizacion cargada.
+    public PrepararEnvioResponse prepararEnvio(Long asignacionId, AuthenticatedPrincipal actor) {
+        Asignacion asignacion = asignacionRepository.findById(asignacionId)
+                .orElseThrow(() -> new EntityNotFoundException("Asignación no encontrada: " + asignacionId));
+        verificarPermiso(asignacion.getUsuario(), actor);
+
+        if (asignacion.getTipo() != TipoAsignacion.COMPRA_AGIL) {
+            throw new IllegalStateException("Solo se pueden enviar cotizaciones de Compra Ágil");
+        }
+        if (asignacion.getEstado() != EstadoAsignacion.COMPLETADO) {
+            throw new IllegalStateException("La asignación todavía no está completada");
+        }
+        if (asignacion.isPendienteRevision()) {
+            throw new IllegalStateException("La cotización está pendiente de revisión");
+        }
+        if (asignacion.isEnviadoMercadoPublico()) {
+            throw new IllegalStateException("Esta cotización ya fue enviada a Mercado Público");
+        }
+        if (asignacion.getCotizacionJson() == null || asignacion.getCotizacionJson().isBlank()) {
+            throw new IllegalStateException("La asignación no tiene una cotización cargada");
+        }
+        // La extension verifica contra este RUT que la empresa activa en
+        // Mercado Publico sea la correcta antes de enviar (envia sola, nadie
+        // revisa): sin RUT no hay contra que verificar, asi que no se envia.
+        Empresa empresa = asignacion.getUsuario().getEmpresa();
+        if (empresa == null || empresa.getRut() == null || empresa.getRut().isBlank()) {
+            throw new IllegalStateException("La empresa de esta asignación no tiene RUT cargado: no se puede verificar en Mercado Público");
+        }
+
+        return new PrepararEnvioResponse(
+                asignacion.getId(),
+                asignacion.getCodigoExterno(),
+                asignacion.getTipo(),
+                asignacion.getCotizacionJson(),
+                empresa.getRut(),
+                empresa.getNombre());
     }
 
     // Guarda el borrador de cotizacion armado en la fase ANALISIS (ver
