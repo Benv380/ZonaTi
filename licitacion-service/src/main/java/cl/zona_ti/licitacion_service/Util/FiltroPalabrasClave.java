@@ -48,6 +48,17 @@ public final class FiltroPalabrasClave {
         return frases;
     }
 
+    // Frases de un filtro de la empresa: las del RUBRO mas las de las
+    // PALABRAS CLAVE (una licitacion aparece si cumple cualquiera de las dos).
+    // Pedido 2026-10-14 (paridad con Api-Prueba): el rubro que configura el
+    // ADMIN_EMPRESA no filtraba nada (era solo una etiqueta). Acepta varios
+    // rubros separados por coma, igual que las palabras clave.
+    public static List<List<String>> frasesDelFiltro(String rubro, String palabrasClave) {
+        List<List<String>> frases = new ArrayList<>(frases(rubro));
+        frases.addAll(frases(palabrasClave));
+        return frases;
+    }
+
     // true si "textoNormalizado" (ver normalizar) cumple alguna frase. Sin
     // frases, no restringe.
     public static boolean coincide(String textoNormalizado, List<List<String>> frases) {

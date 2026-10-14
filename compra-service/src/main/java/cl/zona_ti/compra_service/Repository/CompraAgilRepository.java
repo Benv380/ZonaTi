@@ -1,6 +1,7 @@
 package cl.zona_ti.compra_service.Repository;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -92,6 +93,16 @@ public interface CompraAgilRepository extends JpaRepository<CompraAgilEntity, St
             + "OR (c.fechaCierre IS NULL AND c.fechaCierreSegundoLlamado IS NULL AND c.fechaPublicacion >= :desde) "
             + "ORDER BY c.fechaPublicacion DESC")
     List<CompraAgilEntity> findAbiertas(@Param("ahora") LocalDateTime ahora, @Param("desde") LocalDateTime desde);
+
+    // Nombre y descripcion de los productos solicitados de un grupo de
+    // compras, en una sola consulta: [codigo de la compra, nombre,
+    // descripcion]. Los nombres vienen del catalogo de MP (ej. "Notebook,
+    // laptop o computador portatil excepto Tablet PC") y suelen decir mas del
+    // rubro que el nombre de la compra (ej. "Adquisicion de equipos"). Ver
+    // CompraAgilService.buscarPorPerfil.
+    @Query("SELECT p.compraAgil.codigo, p.nombre, p.descripcion FROM CompraAgilProductoSolicitadoEntity p "
+            + "WHERE p.compraAgil.codigo IN :codigos")
+    List<Object[]> findTextoProductos(@Param("codigos") Collection<String> codigos);
 
     // Panel "perfil del comprador" (ver CompraAgilService.perfilComprador):
     // TODO lo cacheado de un mismo organismo, sin filtro de fecha -- a

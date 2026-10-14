@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -48,6 +49,9 @@ import cl.zona_ti.compra_service.Util.FiltroPalabrasClave;
 
 @Service
 public class CompraAgilService {
+
+    // Codigos por consulta en textoProductos (ver buscarPorPerfil).
+    private static final int TAMANO_LOTE_PRODUCTOS = 1000;
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CompraAgilService.class);
 
@@ -166,12 +170,17 @@ public class CompraAgilService {
         LocalDateTime ahora = FechaParser.ahora();
         List<CompraAgilEntity> abiertas = compraAgilRepository.findAbiertas(ahora, ahora.minusHours(48));
 
-        // Texto normalizado una sola vez por compra (no una vez por filtro).
+        // Texto normalizado una sola vez por compra (no una vez por filtro):
+        // nombre + descripcion + productos solicitados (2026-10-14: antes solo
+        // nombre y descripcion, y quedaban fuera compras del rubro cuyo nombre
+        // era generico).
+        Map<String, String> productosPorCodigo = textoProductos(abiertas);
         Map<String, String> textoPorCodigo = new HashMap<>();
         for (CompraAgilEntity compra : abiertas) {
             textoPorCodigo.put(compra.getCodigo(), FiltroPalabrasClave.normalizar(
                     (compra.getNombre() != null ? compra.getNombre() : "") + " "
-                            + (compra.getDescripcion() != null ? compra.getDescripcion() : "")));
+                            + (compra.getDescripcion() != null ? compra.getDescripcion() : "") + " "
+                            + productosPorCodigo.getOrDefault(compra.getCodigo(), "")));
         }
 
         // LinkedHashMap: union de todos los filtros sin repetir compras, en
@@ -179,7 +188,7 @@ public class CompraAgilService {
         // reordena despues segun lo que pida el panel).
         LinkedHashMap<String, CompraAgilEntity> combinadas = new LinkedHashMap<>();
         for (PerfilBusquedaDto perfil : perfiles) {
-            List<List<String>> frases = FiltroPalabrasClave.frases(perfil.palabrasClave());
+            List<List<String>> frases = FiltroPalabrasClave.frasesDelFiltro(perfil.rubro(), perfil.palabrasClave());
             Integer region = parseRegion(perfil.regionCodigo());
             for (CompraAgilEntity compra : abiertas) {
                 if ((region == null || region.equals(compra.getRegion()))
@@ -189,6 +198,27 @@ public class CompraAgilService {
             }
         }
         return paginarCacheado(List.copyOf(combinadas.values()), pagina, tamano, filtros);
+    }
+
+    // Texto de los productos solicitados por compra (nombre + descripcion),
+    // consultado de a lotes para no armar un IN gigante.
+    private Map<String, String> textoProductos(List<CompraAgilEntity> compras) {
+        List<String> codigos = compras.stream().map(CompraAgilEntity::getCodigo).toList();
+        Map<String, StringBuilder> textos = new HashMap<>();
+        for (int i = 0; i < codigos.size(); i += TAMANO_LOTE_PRODUCTOS) {
+            List<String> lote = new ArrayList<>(codigos.subList(i, Math.min(i + TAMANO_LOTE_PRODUCTOS, codigos.size())));
+            for (Object[] fila : compraAgilRepository.findTextoProductos(lote)) {
+                StringBuilder texto = textos.computeIfAbsent((String) fila[0], codigo -> new StringBuilder());
+                for (int j = 1; j < fila.length; j++) {
+                    if (fila[j] != null) {
+                        texto.append(' ').append(fila[j]);
+                    }
+                }
+            }
+        }
+        Map<String, String> resultado = new HashMap<>();
+        textos.forEach((codigo, texto) -> resultado.put(codigo, texto.toString()));
+        return resultado;
     }
 
     // Panel "perfil del comprador" (pedido 2026-09-25): agrega, del lado

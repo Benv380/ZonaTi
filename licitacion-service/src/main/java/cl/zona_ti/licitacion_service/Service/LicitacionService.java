@@ -30,6 +30,7 @@ import cl.zona_ti.licitacion_service.Dto.PerfilBusquedaDto;
 import cl.zona_ti.licitacion_service.Mapper.LicitacionMapper;
 import cl.zona_ti.licitacion_service.Model.Alcance;
 import cl.zona_ti.licitacion_service.Model.LicitacionEntity;
+import cl.zona_ti.licitacion_service.Model.LicitacionItemEntity;
 import cl.zona_ti.licitacion_service.Repository.LicitacionRepository;
 import cl.zona_ti.licitacion_service.Security.AuthenticatedPrincipal;
 import cl.zona_ti.licitacion_service.Util.FechaParser;
@@ -305,17 +306,28 @@ public class LicitacionService {
         LocalDateTime desde = ZonedDateTime.now(ZONA_CHILE).minusDays(diasListado).toLocalDateTime();
         List<LicitacionEntity> cacheadas = licitacionRepository.findByFechaPublicacionDesde(desde);
 
-        // Texto normalizado una sola vez por licitacion (no una vez por filtro).
+        // Texto normalizado una sola vez por licitacion (no una vez por filtro):
+        // nombre + descripcion + sus items (producto, descripcion y categoria,
+        // que es la clasificacion de rubro de MP). Los items ya vienen cargados
+        // (JOIN FETCH en findByFechaPublicacionDesde).
         Map<String, String> textoPorCodigo = new HashMap<>();
         for (LicitacionEntity licitacion : cacheadas) {
-            textoPorCodigo.put(licitacion.getCodigoExterno(), FiltroPalabrasClave.normalizar(
-                    (licitacion.getNombre() != null ? licitacion.getNombre() : "") + " "
-                            + (licitacion.getDescripcion() != null ? licitacion.getDescripcion() : "")));
+            StringBuilder texto = new StringBuilder()
+                    .append(licitacion.getNombre() != null ? licitacion.getNombre() : "").append(' ')
+                    .append(licitacion.getDescripcion() != null ? licitacion.getDescripcion() : "");
+            for (LicitacionItemEntity item : licitacion.getItems()) {
+                for (String parte : new String[] { item.getNombreProducto(), item.getDescripcion(), item.getCategoria() }) {
+                    if (parte != null) {
+                        texto.append(' ').append(parte);
+                    }
+                }
+            }
+            textoPorCodigo.put(licitacion.getCodigoExterno(), FiltroPalabrasClave.normalizar(texto.toString()));
         }
 
         LinkedHashMap<String, LicitacionEntity> combinadas = new LinkedHashMap<>();
         for (PerfilBusquedaDto perfil : perfiles) {
-            List<List<String>> frases = FiltroPalabrasClave.frases(perfil.palabrasClave());
+            List<List<String>> frases = FiltroPalabrasClave.frasesDelFiltro(perfil.rubro(), perfil.palabrasClave());
             for (LicitacionEntity licitacion : cacheadas) {
                 if (coincideConPerfil(licitacion, textoPorCodigo.get(licitacion.getCodigoExterno()), frases,
                         perfil.regionNombre())) {
