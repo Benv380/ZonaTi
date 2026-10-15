@@ -10,6 +10,7 @@ public record PerfilBusquedaResponse(
         String nombre,
         String rubro,
         String palabrasClave,
+        String catalogoJson,
         String regionCodigo,
         String regionNombre
 ) {

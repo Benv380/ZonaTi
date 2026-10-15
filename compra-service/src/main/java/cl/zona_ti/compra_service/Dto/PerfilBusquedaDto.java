@@ -11,6 +11,8 @@ public record PerfilBusquedaDto(
         String nombre,
         String rubro,
         String palabrasClave,
+        // Seleccion del catalogo de productos (JSON, ver CatalogoService).
+        String catalogoJson,
         String regionCodigo,
         String regionNombre
 ) {

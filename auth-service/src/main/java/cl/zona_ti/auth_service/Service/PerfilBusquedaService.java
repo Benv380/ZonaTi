@@ -83,9 +83,16 @@ public class PerfilBusquedaService {
     }
 
     private void aplicarDatos(PerfilBusqueda perfil, ActualizarPerfilRequest request) {
+        boolean sinPalabras = request.getPalabrasClave() == null || request.getPalabrasClave().isBlank();
+        boolean sinCatalogo = request.getCatalogoJson() == null || request.getCatalogoJson().isBlank()
+                || request.getCatalogoJson().replaceAll("\\s", "").equals("[]");
+        if (sinPalabras && sinCatalogo) {
+            throw new IllegalArgumentException("Elija productos del catálogo o escriba palabras clave");
+        }
         perfil.setNombre(request.getNombre());
         perfil.setRubro(request.getRubro());
-        perfil.setPalabrasClave(request.getPalabrasClave());
+        perfil.setPalabrasClave(sinPalabras ? null : request.getPalabrasClave());
+        perfil.setCatalogoJson(sinCatalogo ? null : request.getCatalogoJson());
         perfil.setRegionCodigo(request.getRegionCodigo());
         perfil.setRegionNombre(request.getRegionNombre());
         perfil.setPerfilCompletado(true);
@@ -113,6 +120,7 @@ public class PerfilBusquedaService {
                 perfil.getNombre(),
                 perfil.getRubro(),
                 perfil.getPalabrasClave(),
+                perfil.getCatalogoJson(),
                 perfil.getRegionCodigo(),
                 perfil.getRegionNombre());
     }

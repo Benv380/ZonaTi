@@ -94,13 +94,13 @@ public interface CompraAgilRepository extends JpaRepository<CompraAgilEntity, St
             + "ORDER BY c.fechaPublicacion DESC")
     List<CompraAgilEntity> findAbiertas(@Param("ahora") LocalDateTime ahora, @Param("desde") LocalDateTime desde);
 
-    // Nombre y descripcion de los productos solicitados de un grupo de
-    // compras, en una sola consulta: [codigo de la compra, nombre,
-    // descripcion]. Los nombres vienen del catalogo de MP (ej. "Notebook,
+    // Codigo de catalogo, nombre y descripcion de los productos solicitados
+    // de un grupo de compras, en una sola consulta: [codigo de la compra,
+    // codigo de producto, nombre, descripcion]. Los nombres vienen del catalogo de MP (ej. "Notebook,
     // laptop o computador portatil excepto Tablet PC") y suelen decir mas del
     // rubro que el nombre de la compra (ej. "Adquisicion de equipos"). Ver
     // CompraAgilService.buscarPorPerfil.
-    @Query("SELECT p.compraAgil.codigo, p.nombre, p.descripcion FROM CompraAgilProductoSolicitadoEntity p "
+    @Query("SELECT p.compraAgil.codigo, p.codigoProducto, p.nombre, p.descripcion FROM CompraAgilProductoSolicitadoEntity p "
             + "WHERE p.compraAgil.codigo IN :codigos")
     List<Object[]> findTextoProductos(@Param("codigos") Collection<String> codigos);
 

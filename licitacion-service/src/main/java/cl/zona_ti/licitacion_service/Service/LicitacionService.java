@@ -8,13 +8,16 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ForkJoinPool;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -46,6 +49,7 @@ public class LicitacionService {
     private final LicitacionRepository licitacionRepository;
     private final LicitacionMapper licitacionMapper;
     private final PerfilClient perfilClient;
+    private final CatalogoService catalogoService;
 
     // Tamaño de pagina por defecto para /listar y /mi-filtro -- ver
     // paginar(). 15 es lo que pidio el usuario para que la pagina no quede
@@ -82,11 +86,12 @@ public class LicitacionService {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(LicitacionService.class);
 
     public LicitacionService(LicitacionClient licitacionClient, LicitacionRepository licitacionRepository,
-            LicitacionMapper licitacionMapper, PerfilClient perfilClient) {
+            LicitacionMapper licitacionMapper, PerfilClient perfilClient, CatalogoService catalogoService) {
         this.licitacionClient = licitacionClient;
         this.licitacionRepository = licitacionRepository;
         this.licitacionMapper = licitacionMapper;
         this.perfilClient = perfilClient;
+        this.catalogoService = catalogoService;
     }
 
     // Busqueda por codigo puntual -- ya no se acota por asignaciones (ver
@@ -311,7 +316,15 @@ public class LicitacionService {
         // que es la clasificacion de rubro de MP). Los items ya vienen cargados
         // (JOIN FETCH en findByFechaPublicacionDesde).
         Map<String, String> textoPorCodigo = new HashMap<>();
+        Map<String, Set<String>> codigosPorLicitacion = new HashMap<>();
         for (LicitacionEntity licitacion : cacheadas) {
+            Set<String> codigosItems = new HashSet<>();
+            for (LicitacionItemEntity item : licitacion.getItems()) {
+                if (item.getCodigoProducto() != null) {
+                    codigosItems.add(item.getCodigoProducto().toString());
+                }
+            }
+            codigosPorLicitacion.put(licitacion.getCodigoExterno(), codigosItems);
             StringBuilder texto = new StringBuilder()
                     .append(licitacion.getNombre() != null ? licitacion.getNombre() : "").append(' ')
                     .append(licitacion.getDescripcion() != null ? licitacion.getDescripcion() : "");
@@ -327,10 +340,20 @@ public class LicitacionService {
 
         LinkedHashMap<String, LicitacionEntity> combinadas = new LinkedHashMap<>();
         for (PerfilBusquedaDto perfil : perfiles) {
-            List<List<String>> frases = FiltroPalabrasClave.frasesDelFiltro(perfil.rubro(), perfil.palabrasClave());
+            // Con seleccion del catalogo: SOLO codigo de producto exacto de sus
+            // items (ver CompraAgilService.buscarPorPerfil). Sin seleccion:
+            // rubro + palabras clave.
+            boolean porCatalogo = CatalogoService.tieneSeleccion(perfil.catalogoJson());
+            Set<String> codigosCatalogo = porCatalogo ? catalogoService.codigosDe(perfil.catalogoJson()) : Set.of();
+            List<List<String>> frases = porCatalogo ? List.of()
+                    : FiltroPalabrasClave.frasesDelFiltro(perfil.rubro(), perfil.palabrasClave());
             for (LicitacionEntity licitacion : cacheadas) {
-                if (coincideConPerfil(licitacion, textoPorCodigo.get(licitacion.getCodigoExterno()), frases,
-                        perfil.regionNombre())) {
+                boolean coincide = porCatalogo
+                        ? coincideConPerfil(licitacion, null, List.of(), perfil.regionNombre())
+                                && !Collections.disjoint(codigosPorLicitacion.get(licitacion.getCodigoExterno()), codigosCatalogo)
+                        : coincideConPerfil(licitacion, textoPorCodigo.get(licitacion.getCodigoExterno()), frases,
+                                perfil.regionNombre());
+                if (coincide) {
                     combinadas.putIfAbsent(licitacion.getCodigoExterno(), licitacion);
                 }
             }

@@ -31,7 +31,10 @@ public class GatewayRoutesConfig {
                 // AdjuntoController) y el trigger manual de sync
                 // (SyncController) -- todo lo que compra-service expone.
                 .route("compra-agil", r -> r
-                        .path("/compra/agil/**", "/compra/sync/compra-agil", "/compra/sync/salud")
+                        .path("/compra/agil/**", "/compra/sync/compra-agil", "/compra/sync/salud",
+                                // Buscador del catalogo de productos de MP
+                                // (filtros de Mi Empresa, ver CatalogoController).
+                                "/compra/catalogo/**")
                         .uri(compraAgilUrl))
                 // Licitaciones + sus adjuntos (el scraper Playwright corre
                 // adentro de licitacion-service) y su propio trigger manual

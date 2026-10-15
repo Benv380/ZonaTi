@@ -222,6 +222,14 @@ ALTER TABLE perfil_busqueda ALTER COLUMN nombre SET NOT NULL;
 -- Ya no viene gratis con la PK (antes empresa_id era la PK, indexada sola).
 CREATE INDEX IF NOT EXISTS idx_perfil_busqueda_empresa ON perfil_busqueda (empresa_id);
 
+-- Seleccion del catalogo de productos de MP (clasificacion ONU) del filtro
+-- (2026-10-15): familias, clases o productos puntuales, como JSON
+-- [{"nivel":"FAMILIA|CLASE|PRODUCTO","clave":"...","nombre":"..."}]. Opaco
+-- para este servicio (lo arma Mi Empresa, lo interpreta compra-service, que
+-- tiene el catalogo). Con seleccion, el filtro compara por codigo de
+-- producto exacto y no por palabras (cero falsos positivos).
+ALTER TABLE perfil_busqueda ADD COLUMN IF NOT EXISTS catalogo_json TEXT;
+
 -- Asignacion manual e individual de una licitacion/compra agil puntual a
 -- un usuario -- capa ADICIONAL sobre perfil_busqueda, no un reemplazo: el
 -- filtro de empresa sigue acotando el universo por rubro/region, y esto le

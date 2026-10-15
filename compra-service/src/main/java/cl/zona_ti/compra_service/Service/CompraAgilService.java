@@ -6,10 +6,13 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.Optional;
 
 import org.springframework.stereotype.Service;
@@ -70,6 +73,7 @@ public class CompraAgilService {
     // (ni el detalle completo, ni los cambios de estado) -- solo se
     // guardaban bien la primera vez, cuando todavia no existian.
     private final TransactionTemplate transactionTemplate;
+    private final CatalogoService catalogoService;
 
     // Tamaño de pagina por defecto para /listar -- ver
     // listarUltimasOchoHorasCacheado().
@@ -78,7 +82,7 @@ public class CompraAgilService {
     public CompraAgilService(CompraAgilClient compraAgilClient, CompraAgilRepository compraAgilRepository,
             CompraAgilProveedorCotizandoRepository compraAgilProveedorCotizandoRepository,
             CompraAgilMapper compraAgilMapper, PerfilClient perfilClient, ReclamosClient reclamosClient,
-            PlatformTransactionManager transactionManager) {
+            PlatformTransactionManager transactionManager, CatalogoService catalogoService) {
         this.compraAgilClient = compraAgilClient;
         this.compraAgilRepository = compraAgilRepository;
         this.compraAgilProveedorCotizandoRepository = compraAgilProveedorCotizandoRepository;
@@ -86,6 +90,7 @@ public class CompraAgilService {
         this.perfilClient = perfilClient;
         this.reclamosClient = reclamosClient;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.catalogoService = catalogoService;
     }
 
     // Interno/de confianza -- los "filtros" ya vienen resueltos (por el
@@ -174,7 +179,8 @@ public class CompraAgilService {
         // nombre + descripcion + productos solicitados (2026-10-14: antes solo
         // nombre y descripcion, y quedaban fuera compras del rubro cuyo nombre
         // era generico).
-        Map<String, String> productosPorCodigo = textoProductos(abiertas);
+        ProductosDeCompras productos = productosDe(abiertas);
+        Map<String, String> productosPorCodigo = productos.texto();
         Map<String, String> textoPorCodigo = new HashMap<>();
         for (CompraAgilEntity compra : abiertas) {
             textoPorCodigo.put(compra.getCodigo(), FiltroPalabrasClave.normalizar(
@@ -188,11 +194,22 @@ public class CompraAgilService {
         // reordena despues segun lo que pida el panel).
         LinkedHashMap<String, CompraAgilEntity> combinadas = new LinkedHashMap<>();
         for (PerfilBusquedaDto perfil : perfiles) {
-            List<List<String>> frases = FiltroPalabrasClave.frasesDelFiltro(perfil.rubro(), perfil.palabrasClave());
+            // Con seleccion del catalogo (2026-10-15): SOLO codigo de producto
+            // exacto -- la compra aparece si pide algun producto de lo elegido.
+            // Sin seleccion (filtros anteriores): rubro + palabras clave.
+            boolean porCatalogo = CatalogoService.tieneSeleccion(perfil.catalogoJson());
+            Set<String> codigosCatalogo = porCatalogo ? catalogoService.codigosDe(perfil.catalogoJson()) : Set.of();
+            List<List<String>> frases = porCatalogo ? List.of()
+                    : FiltroPalabrasClave.frasesDelFiltro(perfil.rubro(), perfil.palabrasClave());
             Integer region = parseRegion(perfil.regionCodigo());
             for (CompraAgilEntity compra : abiertas) {
-                if ((region == null || region.equals(compra.getRegion()))
-                        && FiltroPalabrasClave.coincide(textoPorCodigo.get(compra.getCodigo()), frases)) {
+                if (region != null && !region.equals(compra.getRegion())) {
+                    continue;
+                }
+                boolean coincide = porCatalogo
+                        ? !Collections.disjoint(productos.codigos().getOrDefault(compra.getCodigo(), Set.of()), codigosCatalogo)
+                        : FiltroPalabrasClave.coincide(textoPorCodigo.get(compra.getCodigo()), frases);
+                if (coincide) {
                     combinadas.putIfAbsent(compra.getCodigo(), compra);
                 }
             }
@@ -200,16 +217,25 @@ public class CompraAgilService {
         return paginarCacheado(List.copyOf(combinadas.values()), pagina, tamano, filtros);
     }
 
-    // Texto de los productos solicitados por compra (nombre + descripcion),
-    // consultado de a lotes para no armar un IN gigante.
-    private Map<String, String> textoProductos(List<CompraAgilEntity> compras) {
+    // Productos solicitados por compra: el texto (nombre + descripcion, para
+    // los filtros por palabras) y los codigos de catalogo (para los filtros
+    // por catalogo). Consultado de a lotes para no armar un IN gigante.
+    private record ProductosDeCompras(Map<String, String> texto, Map<String, Set<String>> codigos) {
+    }
+
+    private ProductosDeCompras productosDe(List<CompraAgilEntity> compras) {
         List<String> codigos = compras.stream().map(CompraAgilEntity::getCodigo).toList();
         Map<String, StringBuilder> textos = new HashMap<>();
+        Map<String, Set<String>> codigosProducto = new HashMap<>();
         for (int i = 0; i < codigos.size(); i += TAMANO_LOTE_PRODUCTOS) {
             List<String> lote = new ArrayList<>(codigos.subList(i, Math.min(i + TAMANO_LOTE_PRODUCTOS, codigos.size())));
             for (Object[] fila : compraAgilRepository.findTextoProductos(lote)) {
-                StringBuilder texto = textos.computeIfAbsent((String) fila[0], codigo -> new StringBuilder());
-                for (int j = 1; j < fila.length; j++) {
+                String codigoCompra = (String) fila[0];
+                if (fila[1] != null) {
+                    codigosProducto.computeIfAbsent(codigoCompra, c -> new HashSet<>()).add(fila[1].toString().trim());
+                }
+                StringBuilder texto = textos.computeIfAbsent(codigoCompra, c -> new StringBuilder());
+                for (int j = 2; j < fila.length; j++) {
                     if (fila[j] != null) {
                         texto.append(' ').append(fila[j]);
                     }
@@ -218,7 +244,7 @@ public class CompraAgilService {
         }
         Map<String, String> resultado = new HashMap<>();
         textos.forEach((codigo, texto) -> resultado.put(codigo, texto.toString()));
-        return resultado;
+        return new ProductosDeCompras(resultado, codigosProducto);
     }
 
     // Panel "perfil del comprador" (pedido 2026-09-25): agrega, del lado

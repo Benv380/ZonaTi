@@ -2,6 +2,7 @@ package cl.zona_ti.auth_service.Model;
 
 import java.time.LocalDateTime;
 
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -41,6 +42,10 @@ public class PerfilBusqueda {
     private String rubro;
 
     private String palabrasClave;
+
+    // Seleccion del catalogo de productos de MP (JSON opaco, ver schema.sql).
+    @Column(name = "catalogo_json", columnDefinition = "TEXT")
+    private String catalogoJson;
 
     private String regionCodigo;
 

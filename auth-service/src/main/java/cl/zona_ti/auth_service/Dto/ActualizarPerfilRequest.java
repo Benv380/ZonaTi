@@ -13,8 +13,12 @@ public class ActualizarPerfilRequest {
     @NotBlank(message = "El rubro es obligatorio")
     private String rubro;
 
-    @NotBlank(message = "Las palabras clave son obligatorias")
+    // Opcionales si el filtro tiene seleccion del catalogo (ver
+    // PerfilBusquedaService.aplicarDatos: al menos una de las dos).
     private String palabrasClave;
+
+    // Seleccion del catalogo de productos de MP (JSON, ver schema.sql).
+    private String catalogoJson;
 
     // Sin @NotBlank (pedido explicito 2026-10-02, paridad con Api-Prueba):
     // vacio significa "todo el pais, sin restriccion de region" -- ver
@@ -49,6 +53,14 @@ public class ActualizarPerfilRequest {
 
     public void setPalabrasClave(String palabrasClave) {
         this.palabrasClave = palabrasClave;
+    }
+
+    public String getCatalogoJson() {
+        return catalogoJson;
+    }
+
+    public void setCatalogoJson(String catalogoJson) {
+        this.catalogoJson = catalogoJson;
     }
 
     public String getRegionCodigo() {
