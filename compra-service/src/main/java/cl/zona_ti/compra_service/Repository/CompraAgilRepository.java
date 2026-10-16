@@ -104,6 +104,17 @@ public interface CompraAgilRepository extends JpaRepository<CompraAgilEntity, St
             + "WHERE p.compraAgil.codigo IN :codigos")
     List<Object[]> findTextoProductos(@Param("codigos") Collection<String> codigos);
 
+    // Filtros por catalogo: codigos de las compras ABIERTAS (mismo criterio
+    // que findAbiertas) que piden al menos uno de "codigosProducto". La base
+    // devuelve solo las que coinciden, en vez de traer todas las lineas de
+    // productos para comparar en memoria (ver CompraAgilService.buscarPorPerfil).
+    @Query("SELECT DISTINCT p.compraAgil.codigo FROM CompraAgilProductoSolicitadoEntity p JOIN p.compraAgil c "
+            + "WHERE p.codigoProducto IN :codigosProducto "
+            + "AND (COALESCE(c.fechaCierreSegundoLlamado, c.fechaCierre) > :ahora "
+            + "OR (c.fechaCierre IS NULL AND c.fechaCierreSegundoLlamado IS NULL AND c.fechaPublicacion >= :desde))")
+    List<String> findCodigosAbiertasConProductos(@Param("codigosProducto") Collection<String> codigosProducto,
+            @Param("ahora") LocalDateTime ahora, @Param("desde") LocalDateTime desde);
+
     // Panel "perfil del comprador" (ver CompraAgilService.perfilComprador):
     // TODO lo cacheado de un mismo organismo, sin filtro de fecha -- a
     // diferencia de las de arriba, este panel es historico a proposito (que

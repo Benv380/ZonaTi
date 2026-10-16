@@ -6,7 +6,6 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -178,15 +177,18 @@ public class CompraAgilService {
         // Texto normalizado una sola vez por compra (no una vez por filtro):
         // nombre + descripcion + productos solicitados (2026-10-14: antes solo
         // nombre y descripcion, y quedaban fuera compras del rubro cuyo nombre
-        // era generico).
-        ProductosDeCompras productos = productosDe(abiertas);
-        Map<String, String> productosPorCodigo = productos.texto();
+        // era generico). 2026-10-16: solo si algun filtro sigue por palabras
+        // clave -- armarlo (todas las lineas de productos + normalizar) era lo
+        // que hacia lenta la carga, y los filtros por catalogo no lo usan.
         Map<String, String> textoPorCodigo = new HashMap<>();
-        for (CompraAgilEntity compra : abiertas) {
-            textoPorCodigo.put(compra.getCodigo(), FiltroPalabrasClave.normalizar(
-                    (compra.getNombre() != null ? compra.getNombre() : "") + " "
-                            + (compra.getDescripcion() != null ? compra.getDescripcion() : "") + " "
-                            + productosPorCodigo.getOrDefault(compra.getCodigo(), "")));
+        if (perfiles.stream().anyMatch(p -> !CatalogoService.tieneSeleccion(p.catalogoJson()))) {
+            Map<String, String> productosPorCodigo = productosDe(abiertas).texto();
+            for (CompraAgilEntity compra : abiertas) {
+                textoPorCodigo.put(compra.getCodigo(), FiltroPalabrasClave.normalizar(
+                        (compra.getNombre() != null ? compra.getNombre() : "") + " "
+                                + (compra.getDescripcion() != null ? compra.getDescripcion() : "") + " "
+                                + productosPorCodigo.getOrDefault(compra.getCodigo(), "")));
+            }
         }
 
         // LinkedHashMap: union de todos los filtros sin repetir compras, en
@@ -198,7 +200,14 @@ public class CompraAgilService {
             // exacto -- la compra aparece si pide algun producto de lo elegido.
             // Sin seleccion (filtros anteriores): rubro + palabras clave.
             boolean porCatalogo = CatalogoService.tieneSeleccion(perfil.catalogoJson());
-            Set<String> codigosCatalogo = porCatalogo ? catalogoService.codigosDe(perfil.catalogoJson()) : Set.of();
+            // Por catalogo: la base responde que compras abiertas piden alguno
+            // de los codigos (una consulta con indice, solo las que coinciden).
+            Set<String> comprasDelCatalogo = Set.of();
+            if (porCatalogo) {
+                Set<String> codigosCatalogo = catalogoService.codigosDe(perfil.catalogoJson());
+                comprasDelCatalogo = codigosCatalogo.isEmpty() ? Set.of()
+                        : new HashSet<>(compraAgilRepository.findCodigosAbiertasConProductos(codigosCatalogo, ahora, ahora.minusHours(48)));
+            }
             List<List<String>> frases = porCatalogo ? List.of()
                     : FiltroPalabrasClave.frasesDelFiltro(perfil.rubro(), perfil.palabrasClave());
             Integer region = parseRegion(perfil.regionCodigo());
@@ -207,7 +216,7 @@ public class CompraAgilService {
                     continue;
                 }
                 boolean coincide = porCatalogo
-                        ? !Collections.disjoint(productos.codigos().getOrDefault(compra.getCodigo(), Set.of()), codigosCatalogo)
+                        ? comprasDelCatalogo.contains(compra.getCodigo())
                         : FiltroPalabrasClave.coincide(textoPorCodigo.get(compra.getCodigo()), frases);
                 if (coincide) {
                     combinadas.putIfAbsent(compra.getCodigo(), compra);

@@ -315,6 +315,9 @@ public class LicitacionService {
         // nombre + descripcion + sus items (producto, descripcion y categoria,
         // que es la clasificacion de rubro de MP). Los items ya vienen cargados
         // (JOIN FETCH en findByFechaPublicacionDesde).
+        // El texto (armar + normalizar nombre, descripcion e items) solo hace
+        // falta si algun filtro sigue por palabras clave (2026-10-16).
+        boolean hayFiltrosPorPalabras = perfiles.stream().anyMatch(p -> !CatalogoService.tieneSeleccion(p.catalogoJson()));
         Map<String, String> textoPorCodigo = new HashMap<>();
         Map<String, Set<String>> codigosPorLicitacion = new HashMap<>();
         for (LicitacionEntity licitacion : cacheadas) {
@@ -325,6 +328,9 @@ public class LicitacionService {
                 }
             }
             codigosPorLicitacion.put(licitacion.getCodigoExterno(), codigosItems);
+            if (!hayFiltrosPorPalabras) {
+                continue;
+            }
             StringBuilder texto = new StringBuilder()
                     .append(licitacion.getNombre() != null ? licitacion.getNombre() : "").append(' ')
                     .append(licitacion.getDescripcion() != null ? licitacion.getDescripcion() : "");

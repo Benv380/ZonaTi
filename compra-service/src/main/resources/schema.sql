@@ -76,6 +76,9 @@ CREATE TABLE IF NOT EXISTS compra_agil_productos_solicitados (
     unidad_medida       VARCHAR(50)
 );
 CREATE INDEX IF NOT EXISTS idx_ca_prod_solicitados_codigo ON compra_agil_productos_solicitados (compra_agil_codigo);
+-- Filtros por catalogo (2026-10-16): "que compras abiertas piden alguno de
+-- estos codigos de producto" (ver CompraAgilRepository.findCodigosAbiertasConProductos).
+CREATE INDEX IF NOT EXISTS idx_ca_prod_solicitados_producto ON compra_agil_productos_solicitados (codigo_producto);
 
 CREATE TABLE IF NOT EXISTS compra_agil_proveedores_cotizando (
     id_cotizacion               BIGINT PRIMARY KEY,
